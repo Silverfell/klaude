@@ -25,7 +25,7 @@ echo "Overwrote CLAUDE.md."
 
 # Overwrite .claude/commands/init.md and close.md
 mkdir -p "$TARGET_DIR/.claude/commands"
-for cmd in init.md close.md; do
+for cmd in init.md close.md compresschanges.md; do
   src="$SCRIPT_DIR/$cmd"
   dst="$TARGET_DIR/.claude/commands/$cmd"
   if [ ! -f "$src" ]; then

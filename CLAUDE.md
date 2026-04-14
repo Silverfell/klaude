@@ -136,3 +136,4 @@ If you changed code and the COMPLIANCE block is missing, add it now.
 
 - `/init` : Run the entry protocol. See `.claude/commands/init.md`.
 - `/close` : Run the close protocol. See `.claude/commands/close.md`.
+- `/compresschanges` : Compact CHANGES.md history. See `.claude/commands/compresschanges.md`.

@@ -13,6 +13,7 @@ The core rules enforce honesty and discipline. The coding guidelines draw from p
 | `CLAUDE.md` | Project rules, coding guidelines, and decision protocols |
 | `init.md` | `/init` command: reads or creates session documents at session start |
 | `close.md` | `/close` command: ensures documents are updated before session end |
+| `compresschanges.md` | `/compresschanges` command: compacts old CHANGES.md entries into summaries |
 | `setup.sh` | First-time setup: copies files into your project |
 | `upgrade.sh` | Upgrade: overwrites harness files with latest defaults |
 
