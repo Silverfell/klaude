@@ -1,4 +1,4 @@
-# Klawde
+# Klaude
 
 A lightweight harness for AI-assisted coding sessions, built on hard-earned lessons from working with coding agents.
 
