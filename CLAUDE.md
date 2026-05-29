@@ -44,15 +44,15 @@ All paths relative to working directory.
 - Minimal diffs. Preserve public APIs unless authorized otherwise.
 - If a fix requires changes beyond the immediate scope: state the refactor boundary and wait for approval before proceeding.
 - All migration files must always be idempotent. ALWAYS.
-- Catch specific errors. Never catch-all or catch-and-ignore.
+- Catch specific errors. Never catch-and-ignore. A broad catch is allowed only at process boundaries (top-level handlers, worker loops) and must log.
 - No empty catch blocks. No swallowed errors. Log or propagate.
 - No secrets, credentials, or environment-specific values in code. Use config or env.
 - All SQL through parameterized queries. No string concatenation into SQL. Ever.
 - No unsanitized input in shell commands or process calls.
 - No raw user input rendered into DOM. Sanitize or use framework escaping.
 - No eval(), exec(), Function(), or equivalent dynamic execution.
-- No awaiting inside loops. Collect and resolve concurrently.
-- No queries inside loops. Batch or join.
+- No awaiting inside loops unless ordering, rate limits, or backpressure require it. State the reason in a one-line comment.
+- No queries inside loops unless batching is infeasible (cursor pagination, variable batch sizes). State the reason in a one-line comment.
 - No `any`, no type casts to bypass the compiler. Fix the type.
 - No abstractions for single-use code. No error handling for impossible scenarios.
 - Match existing code style, even if you would write it differently.
@@ -120,11 +120,9 @@ Every code response ends with:
 ```
 ---
 COMPLIANCE:
-- Code prohibitions: [all respected | violated, which and why]
-- Verified before creating: [what you checked]
 - Assumptions: [list | none]
-- Migrations idempotent: [yes, mechanism used | no migrations | N/A]
-- CHANGES.md: [updated | unchanged because X]
+- Verified: [the check you actually ran, e.g. "cargo check passed" | none, because X]
+- CHANGES.md: [appended N entries | unchanged because X]
 - BRIEFING.md: [updated | unchanged because X]
 ```
 
