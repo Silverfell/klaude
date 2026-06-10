@@ -1,6 +1,6 @@
-# Klaude
+# Klawde
 
-Klaude is a lightweight harness for Claude Code that makes sessions more reliable.
+Klawde is a lightweight harness for Claude Code that makes sessions more reliable.
 
 It does four things:
 
@@ -15,7 +15,7 @@ The goal is simple: less agent drift, less forgotten context, less vague "the mo
 
 Coding agents are useful, but they are sloppy by default.
 
-They lose context across sessions, invent assumptions, skip verification, and leave behind work with no durable record of what changed or why. Klaude adds a minimal operating discipline around that workflow.
+They lose context across sessions, invent assumptions, skip verification, and leave behind work with no durable record of what changed or why. Klawde adds a minimal operating discipline around that workflow.
 
 It is not a framework.
 It is not an IDE plugin.
@@ -25,7 +25,7 @@ It is a small harness that gives Claude Code a stricter contract for how a sessi
 
 ## Who this is for
 
-Klaude is for people who already use Claude Code and want:
+Klawde is for people who already use Claude Code and want:
 
 - a consistent session protocol
 - a living project brief
@@ -39,26 +39,26 @@ It is especially useful on projects where architecture, scope, and decision hist
 
 | File | Purpose |
 |------|---------|
-| `CLAUDE.md` | Project rules, coding discipline, verification rules, and output contract |
-| `init.md` | `/init` command: reads or creates session documents at session start |
-| `close.md` | `/close` command: updates session records before ending work |
-| `compresschanges.md` | `/compresschanges` command: compacts older `CHANGES.md` history into summaries |
+| `template/CLAUDE.md` | Project rules, coding discipline, verification rules, and output contract |
+| `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
+| `template/close.md` | `/close` command: updates session records before ending work |
+| `template/compresschanges.md` | `/compresschanges` command: compacts older `CHANGES.md` history into summaries |
 | `setup.sh` | First-time setup: copies the harness files into your project |
-| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults and converts legacy `CHANGES.md` entries |
+| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults, converts legacy `CHANGES.md` entries, and retires the legacy `/init` command |
 
 ## How it works
 
-### `/init`
+### `/klawde`
 
-Run this at the start of every Claude Code session.
+Run this at the start of every Claude Code session. (The command is named `/klawde` rather than `/init` to avoid colliding with Claude Code's built-in `/init`.)
 
 It makes Claude Code:
 
-1. check whether `BRIEFING.md` exists
-2. check whether `CHANGES.md` exists
-3. create them if missing
-4. read `BRIEFING.md` completely
-5. read at least the last 30 lines of `CHANGES.md`
+1. check whether `BRIEFING.md` and `CHANGES.md` exist, and create them if missing
+2. read `BRIEFING.md` completely
+3. ask for the project's purpose and current scope if the brief is empty
+4. read at least the last 30 lines of `CHANGES.md`
+5. check that recent changes do not contradict the brief
 6. confirm readiness, then stop
 
 This forces the session to begin from actual project state instead of hand-waving.
@@ -72,7 +72,7 @@ It makes Claude Code:
 1. review the current `CHANGES.md` and `BRIEFING.md`
 2. review what changed in the session
 3. append typed journal entries for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
-4. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed
+4. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
 5. confirm what was recorded, then stop
 
 This gives the next session a real handoff.
@@ -129,6 +129,8 @@ Format:
 YYYY-MM-DD [type] description
 ```
 
+For example: `2026-05-12 [decision] Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate`
+
 Types:
 
 - `decision`
@@ -152,7 +154,7 @@ Move into the project where you want to install the harness:
 cd /path/to/your/project
 ```
 
-Run the setup script from the Klaude repo:
+Run the setup script from the Klawde repo:
 
 ```bash
 /path/to/klaude/setup.sh
@@ -161,14 +163,14 @@ Run the setup script from the Klaude repo:
 That will copy:
 
 - `CLAUDE.md`
-- `.claude/commands/init.md`
+- `.claude/commands/klawde.md`
 - `.claude/commands/close.md`
 - `.claude/commands/compresschanges.md`
 
 Then start Claude Code and run:
 
 ```txt
-/init
+/klawde
 ```
 
 ## Upgrading
@@ -182,16 +184,17 @@ To overwrite an existing installation with the latest defaults:
 The upgrade script also:
 
 - overwrites the harness files with the latest versions
+- removes the legacy `.claude/commands/init.md` (the entry protocol is now `/klawde`)
 - converts legacy `CHANGES.md` lines from `YYYY-MM-DD: description` to `YYYY-MM-DD [note] description`
 - adds the format hint to `CHANGES.md` if it is missing
-- backs up the old `CHANGES.md` first
+- backs up every file it overwrites or removes first
 
 ## Example workflow
 
 Start session:
 
 ```txt
-/init
+/klawde
 ```
 
 Claude reads the briefing and recent changes, then confirms the session is ready.
@@ -216,7 +219,7 @@ Claude compacts older history into monthly summaries while preserving high-value
 
 ## Design principles
 
-Klaude is opinionated.
+Klawde is opinionated.
 
 It assumes that better agent output comes from stricter process, not from pretending the model is magically dependable.
 
@@ -231,7 +234,7 @@ Core principles:
 
 ## When not to use this
 
-Do not use Klaude if:
+Do not use Klawde if:
 
 - you want a fully autonomous agent stack
 - you do not care about session continuity

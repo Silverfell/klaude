@@ -19,19 +19,19 @@ if [ -f "$TARGET_DIR/CLAUDE.md" ]; then
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Skipped CLAUDE.md."
   else
-    cp "$SCRIPT_DIR/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
+    cp "$SCRIPT_DIR/template/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
     echo "Overwrote CLAUDE.md."
   fi
 else
-  cp "$SCRIPT_DIR/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
+  cp "$SCRIPT_DIR/template/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
   echo "Copied CLAUDE.md."
 fi
 
 # Copy .claude/commands/
 mkdir -p "$TARGET_DIR/.claude/commands"
 
-for cmd in init.md close.md compresschanges.md; do
-  src="$SCRIPT_DIR/$cmd"
+for cmd in klawde.md close.md compresschanges.md; do
+  src="$SCRIPT_DIR/template/$cmd"
   dst="$TARGET_DIR/.claude/commands/$cmd"
 
   if [ ! -f "$src" ]; then
@@ -54,4 +54,4 @@ done
 
 echo ""
 echo "Done. Project initialized at $TARGET_DIR"
-echo "Run /init in Claude Code to start a session."
+echo "Run /klawde in Claude Code to start a session."

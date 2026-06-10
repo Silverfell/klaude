@@ -1,10 +1,10 @@
-# /compresschanges — Compact CHANGES.md History
+# /compresschanges: Compact CHANGES.md History
 
 Run this when CHANGES.md has grown too large. Compresses the history while preserving a high-level summary of everything to date.
 
 ## Steps
 
-1. Back up the current file: `cp CHANGES.md CHANGES.md.bak.$(date +%s)`.
+1. Back up the current file: `cp CHANGES.md "CHANGES.md.bak.$(date +%Y%m%d-%H%M%S)"`. Record the line count from `wc -l < CHANGES.md`.
 
 2. Read `CHANGES.md` completely.
 
@@ -14,18 +14,18 @@ Run this when CHANGES.md has grown too large. Compresses the history while prese
 
    `YYYY-MM-DD [note] Summary: <concise description of that month's key changes>`
 
-   Use the last day of the month as the date. Preserve any entry of type `[decision]` or `[scope]` verbatim (do not summarize those away).
+   Use the last day of the month as the date. Preserve any entry of type `[decision]` or `[scope]` verbatim (do not summarize those away). Existing `[note] Summary:` lines from earlier compressions may be merged into the month's summary, never expanded.
 
 5. Construct the full new file content (header, format hint, summary lines, preserved verbatim entries, last-30-days entries) and write it in a single Write call. Do not use incremental Edits.
 
-6. Ensure the file header and format hint line remain intact.
+6. Ensure the file header and format hint line remain intact. Record the new line count from `wc -l < CHANGES.md`.
 
-7. Output exactly this, then stop:
+7. Output exactly this format, using the recorded line counts, then stop:
 
 ```
 CHANGES.md compressed.
-Original entries: [count]
-Compressed to: [count]
+Lines before: [count]
+Lines after: [count]
 Preserved verbatim: [count] (decisions/scope changes)
 ```
 

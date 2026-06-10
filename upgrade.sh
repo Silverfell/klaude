@@ -16,8 +16,8 @@ echo "Upgrading klawde defaults in $TARGET_DIR"
 echo ""
 
 # Overwrite CLAUDE.md
-if [ ! -f "$SCRIPT_DIR/CLAUDE.md" ]; then
-  echo "Error: $SCRIPT_DIR/CLAUDE.md not found in source."
+if [ ! -f "$SCRIPT_DIR/template/CLAUDE.md" ]; then
+  echo "Error: $SCRIPT_DIR/template/CLAUDE.md not found in source."
   exit 1
 fi
 if [ -f "$TARGET_DIR/CLAUDE.md" ]; then
@@ -25,13 +25,13 @@ if [ -f "$TARGET_DIR/CLAUDE.md" ]; then
   cp "$TARGET_DIR/CLAUDE.md" "$claude_backup"
   echo "Backed up existing CLAUDE.md to $(basename "$claude_backup")."
 fi
-cp "$SCRIPT_DIR/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
+cp "$SCRIPT_DIR/template/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
 echo "Overwrote CLAUDE.md."
 
-# Overwrite .claude/commands/init.md and close.md
+# Overwrite .claude/commands/ files
 mkdir -p "$TARGET_DIR/.claude/commands"
-for cmd in init.md close.md compresschanges.md; do
-  src="$SCRIPT_DIR/$cmd"
+for cmd in klawde.md close.md compresschanges.md; do
+  src="$SCRIPT_DIR/template/$cmd"
   dst="$TARGET_DIR/.claude/commands/$cmd"
   if [ ! -f "$src" ]; then
     echo "Warning: $src not found in source. Skipped."
@@ -45,6 +45,15 @@ for cmd in init.md close.md compresschanges.md; do
   cp "$src" "$dst"
   echo "Overwrote .claude/commands/$cmd."
 done
+
+# Retire legacy /init command (entry protocol is now /klawde)
+legacy_init="$TARGET_DIR/.claude/commands/init.md"
+if [ -f "$legacy_init" ]; then
+  init_backup="$legacy_init.bak.$(date +%Y%m%d-%H%M%S)"
+  cp "$legacy_init" "$init_backup"
+  rm "$legacy_init"
+  echo "Removed legacy .claude/commands/init.md (backed up to $(basename "$init_backup"))."
+fi
 
 # Convert existing CHANGES.md to new typed format
 changes="$TARGET_DIR/CHANGES.md"
