@@ -7,7 +7,7 @@ All paths relative to working directory.
 - **BRIEFING.md**: Project scope, decisions, non-goals. Read completely on session start.
 - **CHANGES.md**: Append-only project journal (decisions, plans, scope, docs, notes, code). Read last 30 lines on session start.
 
-If either file is missing, stop and tell the user to run `/klawde` before continuing with any task.
+If either file is missing, stop and tell the user to run `/klawde` before continuing with any task that modifies files; read-only questions may be answered first.
 
 ---
 
@@ -52,7 +52,7 @@ Rules referencing a specific stack (DOM, TypeScript, migrations) apply when the 
 - No queries inside loops unless batching is infeasible (cursor pagination, variable batch sizes). State the reason in a one-line comment.
 - No `any`, no type casts to bypass the compiler. Fix the type.
 - No abstractions for single-use code. No error handling for impossible scenarios.
-- Match existing code style, even if you would write it differently.
+- Match existing code style, even if you would write it differently. The Code rules above apply to lines you write or modify; do not rewrite pre-existing violations elsewhere unless asked.
 - Remove imports, variables, and functions that your changes made unused. Do not remove pre-existing dead code unless asked.
 
 ### Tools
@@ -76,14 +76,15 @@ Rules referencing a specific stack (DOM, TypeScript, migrations) apply when the 
 
 ## Decision Rules
 
-- **Underspecified request**: Ask one question. Wait.
+- **Underspecified request (scope-level)**: If the ambiguity changes what gets built, ask one question. Wait.
+- **Underspecified request (minor)**: For naming, formatting, default values, or a choice between equivalent approaches, pick a reasonable option and state "ASSUMPTION: [X]". Do not ask.
 - **No acceptance criteria**: State "Acceptance test: [X]" then implement to that.
 - **Must assume**: State "ASSUMPTION: [X]" and isolate it in code.
 - **Code works**: Say "This works.", summarize what changed, then COMPLIANCE block. Stop.
 - **User asks for review**: Raise issues only if they affect correctness, security, reliability, or maintainability.
 - **Offering an alternative**: Confirm request is complete first. One alternative. One-line trade-off. Wait.
 - **Multi-step task**: State a brief plan with verifiable checks before implementing. Format: `1. [Step] → verify: [check]`. Loop until each check passes.
-- **Command or tool fails**: Report the exact error. Do not retry with a different approach unless asked. Do not install packages, change configs, or alter scope to work around the failure.
+- **Command or tool fails**: If the failure looks transient (network, lock, flaky test), retry the same command once. Otherwise, or if the retry fails, report the exact error and stop. Do not switch to a different approach, install packages, change configs, or alter scope to work around the failure.
 
 ---
 
