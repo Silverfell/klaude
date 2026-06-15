@@ -50,7 +50,7 @@ Format: `YYYY-MM-DD [type] description` (max 200 chars). Types: decision, plan, 
    - three or more recent entries concern work on something absent from Current scope, or
    - a `[scope]` or `[decision]` entry is not reflected in the brief.
 
-   If drift, output the contradiction, recommend the user reconcile BRIEFING.md or run /close first, and stop. Do not output the "OK. Ready." block.
+   If drift, output the contradiction, recommend the user reconcile BRIEFING.md or run `/close` first, and stop. Do not output the "OK. Ready." block.
 
 8. If no drift, output exactly this format, then stop:
 

@@ -1,6 +1,6 @@
 # Klawde
 
-Klawde is a lightweight harness for Claude Code that makes sessions more reliable.
+Klawde is a lightweight harness for Claude Code (and Codex) that makes sessions more reliable.
 
 It does four things:
 
@@ -43,8 +43,8 @@ It is especially useful on projects where architecture, scope, and decision hist
 | `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
 | `template/close.md` | `/close` command: updates session records before ending work |
 | `template/compresschanges.md` | `/compresschanges` command: compacts older `CHANGES.md` history into summaries |
-| `setup.sh` | First-time setup: copies the harness files into your project |
-| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults, converts legacy `CHANGES.md` entries, and retires the legacy `/init` command |
+| `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
+| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, converts legacy `CHANGES.md` entries, and retires the legacy `/init` command |
 
 ## How it works
 
@@ -154,23 +154,38 @@ Move into the project where you want to install the harness:
 cd /path/to/your/project
 ```
 
-Run the setup script from the Klawde repo:
+Run the setup script from the Klawde repo. It asks which target to install for; pass a flag to skip the prompt:
 
 ```bash
-/path/to/klaude/setup.sh
+/path/to/klaude/setup.sh            # prompts: [1] claude [2] codex [3] both
+/path/to/klaude/setup.sh --claude   # Claude Code
+/path/to/klaude/setup.sh --codex    # Codex
+/path/to/klaude/setup.sh --both     # both layouts
 ```
 
-That will copy:
+For Claude Code, that copies into the current project:
 
 - `CLAUDE.md`
 - `.claude/commands/klawde.md`
 - `.claude/commands/close.md`
 - `.claude/commands/compresschanges.md`
 
-Then start Claude Code and run:
+For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$close`, and `$compresschanges` (or picked from `/skills`):
+
+- `AGENTS.md`
+- `.agents/skills/klawde/SKILL.md`
+- `.agents/skills/close/SKILL.md`
+- `.agents/skills/compresschanges/SKILL.md`
+
+Skills replace Codex custom prompts, which OpenAI has deprecated.
+
+The `both` option installs both layouts at once: `CLAUDE.md` and `.claude/commands/` for Claude Code, plus `AGENTS.md` and `.agents/skills/` for Codex.
+
+Then start your tool and run the entry protocol:
 
 ```txt
-/klawde
+/klawde     # Claude Code
+$klawde     # Codex
 ```
 
 ## Upgrading
@@ -178,16 +193,25 @@ Then start Claude Code and run:
 To overwrite an existing installation with the latest defaults:
 
 ```bash
-/path/to/klaude/upgrade.sh
+/path/to/klaude/upgrade.sh              # detects the install, then prompts
+/path/to/klaude/upgrade.sh --claude     # force Claude Code
+/path/to/klaude/upgrade.sh --codex      # force Codex
+/path/to/klaude/upgrade.sh --both       # force both layouts
+/path/to/klaude/upgrade.sh --no-backup  # skip the backup prompt, create no .bak files
 ```
+
+With no target flag, the script detects the existing install (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and offers it as the default; press Enter to accept.
+
+It then asks whether to create `.bak` backups before overwriting. Answer `n` and no backup files are created. Use `--backup` or `--no-backup` to skip that prompt.
 
 The upgrade script also:
 
-- overwrites the harness files with the latest versions
-- removes the legacy `.claude/commands/init.md` (the entry protocol is now `/klawde`)
+- overwrites the harness files with the latest versions (Claude, Codex, or both layouts)
+- removes the legacy `.claude/commands/init.md` (Claude installs only; the entry protocol is now `/klawde`)
+- removes deprecated Codex prompts from earlier versions in `$CODEX_HOME/prompts/` (defaulting to `~/.codex/prompts/`)
 - converts legacy `CHANGES.md` lines from `YYYY-MM-DD: description` to `YYYY-MM-DD [note] description`
 - adds the format hint to `CHANGES.md` if it is missing
-- backs up every file it overwrites or removes first
+- backs up every file it overwrites or removes first, unless you decline backups
 
 ## Example workflow
 

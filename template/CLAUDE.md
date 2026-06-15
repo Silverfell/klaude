@@ -7,7 +7,7 @@ All paths relative to working directory.
 - **BRIEFING.md**: Project scope, decisions, non-goals. Read completely on session start.
 - **CHANGES.md**: Append-only project journal (decisions, plans, scope, docs, notes, code). Read last 30 lines on session start.
 
-If either file is missing, stop and tell the user to run `/klawde` before continuing with any task that modifies files; read-only questions may be answered first.
+If either file is missing, stop and tell the user to run `/klawde` before continuing with any task that modifies files; read-only questions may be answered first. Running `/klawde` itself is exempt: it creates these files.
 
 ---
 
@@ -116,7 +116,7 @@ Bad entry: `2026-05-12 [code] fixed bug` (belongs in a commit message; tells a f
 
 ## Output Format
 
-Every response in which files were created or modified ends with:
+Every response in which files were created or modified ends with the block below, except responses from the `/klawde`, `/close`, and `/compresschanges` commands, which use the exact closing output defined in their own command files:
 
 ```
 ---
@@ -140,7 +140,7 @@ COMPLIANCE:
 - BRIEFING.md: unchanged because scope did not shift
 ```
 
-If you changed files and the COMPLIANCE block is missing, add it now.
+If you changed files and the COMPLIANCE block is missing, add it now (this does not apply to the exempt commands above).
 
 ---
 
