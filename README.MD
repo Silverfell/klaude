@@ -39,8 +39,9 @@ It is especially useful on projects where architecture, scope, and decision hist
 
 | File | Purpose |
 |------|---------|
-| `template/CLAUDE.md` | Project rules, coding discipline, verification rules, and output contract |
-| `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
+| `template/CLAUDE.md` | Project rules, verification rules, output contract, plus an optional code-craft module (delete that section if you only want drift and efficiency control) |
+| `template/klawde.md` | `/klawde` command: reads or creates session documents at session start (full mode, code-craft rules active) |
+| `template/klaude.md` | `/klaude` command: same entry protocol in lean mode, with the code-craft rules disabled for the session |
 | `template/close.md` | `/close` command: updates session records before ending work |
 | `template/compresschanges.md` | `/compresschanges` command: compacts older `CHANGES.md` history into summaries |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
@@ -54,26 +55,31 @@ Run this at the start of every Claude Code session. (The command is named `/klaw
 
 It makes Claude Code:
 
-1. check whether `BRIEFING.md` and `CHANGES.md` exist, and create them if missing
-2. read `BRIEFING.md` completely
-3. ask for the project's purpose and current scope if the brief is empty
-4. read at least the last 30 lines of `CHANGES.md`
-5. check that recent changes do not contradict the brief
-6. confirm readiness, then stop
+1. check whether `BRIEFING.md` and `CHANGES.md` exist, create them if missing, and add any brief fields missing from an older install
+2. note pre-existing uncommitted git changes (informational: possible unfinished work from a prior session)
+3. read `BRIEFING.md` completely
+4. ask for the project's purpose and current scope if the brief is empty
+5. read at least the last 30 lines of `CHANGES.md`, suggesting `/compresschanges` when the journal has grown large
+6. check that recent changes do not contradict the brief, and flag stale focus or next steps
+7. confirm readiness (brief, recent changes, current focus, dirty state), then stop
 
 This forces the session to begin from actual project state instead of hand-waving.
 
+`/klawde` starts the session in full mode: the contract's optional code-craft module (error-handling, batching, typing, and abstraction rules) is active. `/klaude` (note the spelling) runs the same protocol in lean mode: the code-craft module is disabled and the session runs on drift and efficiency control only. Both report the mode in their readiness output.
+
 ### `/close`
 
-Run this at the end of a session.
+Run this at the end of a session. It is also safe to run mid-session as a checkpoint, so a crash or context compaction cannot lose the session's record.
 
 It makes Claude Code:
 
 1. review the current `CHANGES.md` and `BRIEFING.md`
-2. review what changed in the session
+2. review what changed in the session, consulting git to recover work that long sessions may have compacted out of context
 3. append typed journal entries for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
-4. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
-5. confirm what was recorded, then stop
+4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
+5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
+6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks
+7. confirm what was recorded, then stop
 
 This gives the next session a real handoff.
 
@@ -107,8 +113,12 @@ Use it for:
 - key decisions
 - non-goals
 - breaking-change context
+- current focus and next steps (refreshed every `/close`; the next session resumes on-thread instead of reinventing direction)
+- open questions
+- a do-not-touch list (files or areas that are off-limits, and why)
+- environment quirks (durable context that would otherwise be lost when the journal is compressed)
 
-A new session should be able to read this and understand what the project is trying to do.
+A new session should be able to read this and understand what the project is trying to do, and what it was about to do next.
 
 ### `CHANGES.md`
 
@@ -167,13 +177,15 @@ For Claude Code, that copies into the current project:
 
 - `CLAUDE.md`
 - `.claude/commands/klawde.md`
+- `.claude/commands/klaude.md`
 - `.claude/commands/close.md`
 - `.claude/commands/compresschanges.md`
 
-For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$close`, and `$compresschanges` (or picked from `/skills`):
+For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$klaude`, `$close`, and `$compresschanges` (or picked from `/skills`):
 
 - `AGENTS.md`
 - `.agents/skills/klawde/SKILL.md`
+- `.agents/skills/klaude/SKILL.md`
 - `.agents/skills/close/SKILL.md`
 - `.agents/skills/compresschanges/SKILL.md`
 
@@ -218,10 +230,11 @@ The upgrade script also:
 Start session:
 
 ```txt
-/klawde
+/klawde     # full mode
+/klaude     # lean mode, code-craft rules off
 ```
 
-Claude reads the briefing and recent changes, then confirms the session is ready.
+Claude reads the briefing and recent changes, then confirms the session is ready and which mode it is in.
 
 Do the work.
 

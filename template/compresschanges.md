@@ -4,7 +4,7 @@ Run this when CHANGES.md has grown too large. Compresses the history while prese
 
 ## Steps
 
-1. Back up the current file: `cp CHANGES.md "CHANGES.md.bak.$(date +%Y%m%d-%H%M%S)"`. Record the line count from `wc -l < CHANGES.md`.
+1. Back up the current file: `cp CHANGES.md "CHANGES.md.bak.$(date +%Y%m%d-%H%M%S)"`. If the project is a git repository, ensure `.gitignore` contains the line `CHANGES.md.bak.*` (append it if missing) so backups stay out of version control. Record the line count from `wc -l < CHANGES.md`.
 
 2. Read `CHANGES.md` completely.
 

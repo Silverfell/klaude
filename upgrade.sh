@@ -113,6 +113,7 @@ rewrite_codex() {
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#`/klawde`#`$klawde`#g' \
+      -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's#`/compresschanges`#`$compresschanges`#g' \
       "$1"
@@ -142,7 +143,7 @@ upgrade_claude() {
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
   echo "Overwrote $dst."
-  for cmd in klawde.md close.md compresschanges.md; do
+  for cmd in klawde.md klaude.md close.md compresschanges.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if [ -f "$dst" ]; then maybe_backup "$dst"; fi
     mkdir -p "$(dirname "$dst")"
@@ -175,7 +176,9 @@ upgrade_codex() {
   rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
   echo "Overwrote $dst."
   upgrade_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol: read or create BRIEFING.md and CHANGES.md and confirm readiness at session start."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read or create BRIEFING.md and CHANGES.md and confirm readiness at session start, with the Code craft module active."
+  upgrade_skill klaude klaude.md \
+    "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   upgrade_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: record decisions and scope changes to CHANGES.md and update BRIEFING.md before ending work."
   upgrade_skill compresschanges compresschanges.md \

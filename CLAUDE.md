@@ -5,7 +5,7 @@ This repo is the source of Klawde, a session harness for Claude Code. There is n
 ## Layout
 
 - `template/CLAUDE.md`: the harness contract installed into target projects. It governs sessions in those projects, not in this repo.
-- `template/klawde.md`, `template/close.md`, `template/compresschanges.md`: slash commands installed to `.claude/commands/` in target projects (as `/klawde`, `/close`, `/compresschanges`).
+- `template/klawde.md`, `template/klaude.md`, `template/close.md`, `template/compresschanges.md`: slash commands installed to `.claude/commands/` in target projects (as `/klawde`, `/klaude`, `/close`, `/compresschanges`). `/klawde` starts a session in full mode (Code craft module active); `/klaude` is the lean variant that disables it.
 - `setup.sh`: first-time install, run from the target project directory.
 - `upgrade.sh`: overwrites an existing install with the latest defaults, migrates legacy `CHANGES.md` entries, and retires the legacy `/init` command.
 - `README.MD`: user-facing documentation.

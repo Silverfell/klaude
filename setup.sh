@@ -64,6 +64,7 @@ rewrite_codex() {
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#`/klawde`#`$klawde`#g' \
+      -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's#`/compresschanges`#`$compresschanges`#g' \
       "$1"
@@ -104,7 +105,7 @@ install_claude() {
     cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
     echo "Copied $dst."
   fi
-  for cmd in klawde.md close.md compresschanges.md; do
+  for cmd in klawde.md klaude.md close.md compresschanges.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -133,7 +134,9 @@ install_codex() {
     echo "Wrote $dst."
   fi
   install_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol: read or create BRIEFING.md and CHANGES.md and confirm readiness at session start."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read or create BRIEFING.md and CHANGES.md and confirm readiness at session start, with the Code craft module active."
+  install_skill klaude klaude.md \
+    "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   install_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: record decisions and scope changes to CHANGES.md and update BRIEFING.md before ending work."
   install_skill compresschanges compresschanges.md \
@@ -150,11 +153,11 @@ echo ""
 echo "Done. Project initialized at $TARGET_DIR (target: $TARGET)"
 case "$TARGET" in
   claude)
-    echo "Run /klawde in Claude Code to start a session." ;;
+    echo "Run /klawde in Claude Code to start a session (or /klaude to start without the code-craft rules)." ;;
   codex)
     echo "Wrote AGENTS.md and .agents/skills/ in this project."
-    echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session." ;;
+    echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session; \$klaude starts without the code-craft rules." ;;
   both)
     echo "Wrote CLAUDE.md + .claude/commands/ (Claude Code) and AGENTS.md + .agents/skills/ (Codex)."
-    echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session." ;;
+    echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session; klaude is the variant without the code-craft rules." ;;
 esac
