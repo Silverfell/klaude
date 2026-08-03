@@ -6,7 +6,7 @@ This command starts the framework in full mode, with the Code craft module activ
 
 ## Steps
 
-1. Check existence with `ls BRIEFING.md CHANGES.md 2>/dev/null`. Note which printed and which did not. Also run `git status --porcelain 2>/dev/null | head -20` and note any pre-existing uncommitted changes. Dirty state is informational only, never a reason to block: it may be unfinished work from a prior session.
+1. Check existence and size with `ls BRIEFING.md CHANGES.md 2>/dev/null` and `wc -c BRIEFING.md CHANGES.md 2>/dev/null`. Note which printed and which did not, and record both byte counts. Also run `git status --porcelain 2>/dev/null | head -20` and note any pre-existing uncommitted changes. Dirty state is informational only, never a reason to block: it may be unfinished work from a prior session.
 
 2. If `BRIEFING.md` is missing, create it with:
 
@@ -58,7 +58,11 @@ Format: `YYYY-MM-DD [type] description` (max 200 chars). Types: decision, plan, 
 
 6. If Purpose or Current scope in `BRIEFING.md` is empty, ask the user: "What is this project's purpose and current scope?" Write the answer into `BRIEFING.md` before continuing.
 
-7. Read `CHANGES.md` (at least the last 30 lines). If the file exceeds ~200 lines (`wc -l < CHANGES.md`), suggest running `/compresschanges` after this protocol completes. Suggest only; do not run it.
+7. Read `CHANGES.md` (at least the last 30 lines). Then check both records against their budgets, using the byte counts from step 1. These files are read at the start of every session, so their size is a standing cost paid before any work begins.
+   - `CHANGES.md` over ~20 KB: suggest running `/compresschanges` after this protocol completes. Suggest only; do not run it.
+   - `BRIEFING.md` over ~8 KB: report the number, do not diagnose. A brief is large either because the project is large, which is not a fault, or because history leaked into it. Claim the second only if you can quote a specific bullet that narrates a past session; then suggest moving it to `CHANGES.md` at the next `/close`. `/compresschanges` does not touch this file.
+
+   Report both on the `Records` line of the step 9 output whether or not either is over budget.
 
 8. Compare BRIEFING.md's stated purpose and current scope against the last 30 lines of CHANGES.md. If recent changes appear to contradict the brief (work on something the scope excludes, or a `[scope]` or `[decision]` entry the brief does not reflect), output the specific contradiction, recommend the user reconcile BRIEFING.md or run `/close` first, and stop. Do not output the "OK. Ready." block.
 
@@ -71,6 +75,7 @@ OK. Ready.
 BRIEFING.md: <one-sentence summary of current briefing>
 CHANGES.md: <one-sentence summary of recent changes>
 Focus: <Current focus and Next steps | unset | stale: reason>
+Records: <BRIEFING xKB, CHANGES yKB | + "over budget: <which>" when either exceeds step 7's thresholds>
 Dirty: <uncommitted files found in step 1 | clean | not a git repo>
 Mode: <full (Code craft active) | lean (Code craft inactive), per the command that invoked this protocol>
 ```

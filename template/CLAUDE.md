@@ -5,7 +5,7 @@
 All paths relative to working directory.
 
 - **BRIEFING.md**: Project scope, decisions, non-goals, current focus, next steps. Read completely on session start. Treat `Next steps` as a suggestion left by the previous session, not a command: if the journal shows work has moved past it, flag the mismatch instead of following it.
-- **CHANGES.md**: Append-only project journal (decisions, plans, scope, docs, notes, code). Read the last 30 lines on session start.
+- **CHANGES.md**: Typed project journal (decisions, plans, scope, docs, notes, code). Entries are added, not rewritten — the one exception is superseding a decision, see Documentation Updates. Read the last 30 lines on session start.
 
 If either file is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` or `/klaude` is always exempt: they create these files.
 
@@ -130,7 +130,14 @@ Types:
 - `doc`: document added, updated, or removed
 - `scope`: scope added, removed, or clarified
 - `code`: code change that needs project-level context git alone can't convey
-- `note`: external context, blocker, incident, handoff
+- `note`: external context, blocker, handoff, or a finding still open — not a record of work already finished
+
+Four rules keep this file from bloating into noise. A journal that has to be read end-to-end to learn which entries are still true has failed at its only job.
+
+1. **Supersession folds and deletes.** A decision that replaces an earlier one absorbs what it killed (`X over Y; reason`) and the superseded line is removed. This is the only case where an existing entry may be deleted. Entries are otherwise added, never rewritten — but a record whose dead entries still read as live is worse than one that was edited.
+2. **No verification receipts.** Test counts, measured distributions, "0 failures across N runs", console-clean confirmations: these belong in the COMPLIANCE `Verified:` line of your response, never in this file. Their value expires the moment the code they cover changes. Record a measurement only when the measurement itself is an open decision (an unresolved perf number, a limit nobody has ruled on).
+3. **No parameter narration.** If code, config, or an asset file is authoritative for a value, do not copy it here — the copy goes stale silently and future sessions trust it. Record why a value is the way it is, never what it currently is.
+4. **Record the lesson, not the incident.** Session conduct, frustration, blame and blow-by-blow correction history are not project records. When something went wrong and taught something durable, record the transferable part — as a `[note]` if it is an environment trap, or folded into the relevant `[decision]` as the rejected alternative's reason. "Approach X was abandoned; the API bills per generation and the account had no credit" earns its place. "Third attempt at X failed and the user was unhappy" does not.
 
 Good entries:
 
@@ -138,9 +145,19 @@ Good entries:
 - `2026-05-18 [scope] Dropped offline mode; sync complexity not worth it for v1`
 - `2026-05-20 [note] Stripe sandbox webhooks flaky this week; retries can look like test failures`
 
-Bad entry: `2026-05-12 [code] fixed bug` (belongs in a commit message; tells a future session nothing).
+Bad entries:
+
+- `2026-05-12 [code] fixed bug` — belongs in a commit message; tells a future session nothing.
+- `2026-05-12 [code] batchSize 100 -> 500, timeout 30s -> 60s` — the config file is authoritative and this copy will rot. Record the reason, not the number.
+- `2026-05-12 [note] Verified: 200/200 cases valid, suite green, console clean` — evidence for one report on one day. It goes in the response, not the record.
 
 `BRIEFING.md`: Update if scope or decisions changed, or on a breaking change (note reason and impact). Current focus, Next steps, Open questions, and Environment quirks are refreshed by `/close`.
+
+It holds current state, never history — history is CHANGES.md's job. Three rules keep the two apart:
+
+- Exactly **one** `Current focus`, present tense. Sessions **replace** it; they never append a dated one alongside.
+- `Next steps` and `Open questions` are kept true, not kept short: remove what is done or answered. Never drop a live item to hit a count — a large project carries more of both, and that is not a defect.
+- No bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`). If it reads as a journal entry, it belongs in CHANGES.md.
 
 ---
 

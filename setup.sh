@@ -140,7 +140,7 @@ install_codex() {
   install_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: record decisions and scope changes to CHANGES.md and update BRIEFING.md before ending work."
   install_skill compresschanges compresschanges.md \
-    "Run only when explicitly invoked. Klawde journal compaction: summarize CHANGES.md entries older than 30 days while preserving decisions and scope changes."
+    "Run only when explicitly invoked. Klawde journal compaction: drop expired entries, fold superseded decisions, and summarize old history in CHANGES.md while preserving live decisions, scope changes and open findings."
 }
 
 case "$TARGET" in
