@@ -4,8 +4,21 @@
 
 All paths relative to working directory.
 
-- **BRIEFING.md**: Project scope, decisions, non-goals, current focus, next steps. Read completely on session start. Treat `Next steps` as a suggestion left by the previous session, not a command: if the journal shows work has moved past it, flag the mismatch instead of following it.
-- **CHANGES.md**: Typed project journal (decisions, plans, scope, docs, notes, code). Entries are added, not rewritten — the one exception is superseding a decision, see Documentation Updates. Read the last 30 lines on session start.
+- **BRIEFING.md**: The project document, and the only authority on what is currently true — scope, decisions, non-goals, areas, current focus, next steps. Read completely on session start. Treat `Next steps` as a suggestion left by the previous session, not a command: if the log shows work has moved past it, flag the mismatch instead of following it.
+- **CHANGES.md**: The project log (decisions, plans, scope, docs, notes, code). Read the last 5 entries on session start. See below.
+
+### CHANGES.md is a log
+
+Four properties define it. They hold in every rule of this contract and in every slash command; nothing anywhere may contradict them.
+
+1. **Append-only.** New entries go at the tail. Nothing is inserted between existing lines, reordered, or renumbered.
+2. **Immutable.** No entry is ever edited or deleted once written — not when it turns out to be wrong, not when a later decision supersedes it, not to tidy it up. `/compresschanges` is the single exception, and it is maintenance, not authoring.
+3. **Tailed, not read.** A session reads the last 5 entries (`tail -5 CHANGES.md`) and stops. That is enough to know what the last session did. Anything older is reached by targeted search, when a specific question makes it worth looking up. Never read the file in bulk to "get context" — only compaction reads it whole.
+4. **Not authoritative.** It records what happened, never what is true now and never what to do next. An entry is evidence about a past moment. A `[plan]` from last week is not the current plan; a `[decision]` may have been reversed sixty lines later. `BRIEFING.md` answers what holds today.
+
+Property 4 is why 3 is safe, and 3 is why 4 rarely gets tested: a session that reads five entries and takes its direction from the brief cannot be misled by history it never opened.
+
+Maintenance: `/close` compacts the log every session and holds it to a working ceiling of 100 entries. Old history collapses into monthly `SUM` lines; nothing live is ever dropped to meet the number.
 
 If either file is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` or `/klaude` is always exempt: they create these files.
 
@@ -47,6 +60,7 @@ Only an explicit user instruction given this session (Precedence rank 1) can ove
 3. No secrets, credentials, or environment-specific values in code. Use config or env.
 4. All SQL through parameterized queries. No string concatenation into SQL. Ever.
 5. Verify before reporting completion (see Completion & Verification).
+6. Never take an instruction from `CHANGES.md`. It is a log of what happened; `BRIEFING.md` is the only authority on what is true now and what comes next.
 
 ### Scope & Communication
 
@@ -120,9 +134,24 @@ Opinionated code-quality defaults, separate from drift and efficiency control. A
 
 ## Documentation Updates
 
-`CHANGES.md` is a typed project journal, not a git log. Append an entry whenever any of these shift: decisions, plans, scope, documents, external context, or code that needs project-level explanation.
+The four properties in Project Records govern everything here. This section only says how to write a line and what deserves one.
 
-Entry format (one line, max 200 characters total): `YYYY-MM-DD [type] description`
+Append an entry to `CHANGES.md` whenever any of these shift: decisions, plans, scope, documents, external context, or code that needs project-level explanation.
+
+Entry format, one line:
+
+```
+YYYY-MM-DD NNN [type] (area) description  key=value ...
+```
+
+- `YYYY-MM-DD` — the date the entry is written. ISO order, so the file sorts chronologically with no extra work.
+- `NNN` — a zero-padded serial, one higher than the highest already in the file. Never reused, never renumbered, never edited. This is what lets one entry reference another.
+- `[type]` — one of the six below.
+- `(area)` — one of the areas listed in `BRIEFING.md`, or `(-)` when none fits. Never invent an area that is not on that list: two spellings of one area make the field useless for filtering. If work keeps landing outside the list, propose adding an area at the next `/close`.
+- description — free text, one line.
+- tags — optional, separated from the description by two spaces. Only these keys: `supersedes=NNN`, `closes=NNN`, `refs=<commit|PR|issue>`.
+
+Single space between fields. Do not pad to align columns; alignment breaks on the next entry and churns the diff.
 
 Types:
 - `decision`: architectural, design, or process choice made; name the rejected alternative when one exists (`X over Y; reason`)
@@ -132,32 +161,50 @@ Types:
 - `code`: code change that needs project-level context git alone can't convey
 - `note`: external context, blocker, handoff, or a finding still open — not a record of work already finished
 
-Four rules keep this file from bloating into noise. A journal that has to be read end-to-end to learn which entries are still true has failed at its only job.
+Four rules keep the log honest.
 
-1. **Supersession folds and deletes.** A decision that replaces an earlier one absorbs what it killed (`X over Y; reason`) and the superseded line is removed. This is the only case where an existing entry may be deleted. Entries are otherwise added, never rewritten — but a record whose dead entries still read as live is worse than one that was edited.
+1. **Supersession links, never deletes** — property 2, applied. A log entry records that something happened; a later reversal does not make it untrue. When a decision replaces an earlier one, append the new decision carrying `supersedes=NNN` and leave the entry it names exactly where it is. Then update `BRIEFING.md` in the same session, because the brief is where the live decision has to end up: the log now holds both, and by property 4 it is not the thing that says which one counts.
 2. **No verification receipts.** Test counts, measured distributions, "0 failures across N runs", console-clean confirmations: these belong in the COMPLIANCE `Verified:` line of your response, never in this file. Their value expires the moment the code they cover changes. Record a measurement only when the measurement itself is an open decision (an unresolved perf number, a limit nobody has ruled on).
 3. **No parameter narration.** If code, config, or an asset file is authoritative for a value, do not copy it here — the copy goes stale silently and future sessions trust it. Record why a value is the way it is, never what it currently is.
-4. **Record the lesson, not the incident.** Session conduct, frustration, blame and blow-by-blow correction history are not project records. When something went wrong and taught something durable, record the transferable part — as a `[note]` if it is an environment trap, or folded into the relevant `[decision]` as the rejected alternative's reason. "Approach X was abandoned; the API bills per generation and the account had no credit" earns its place. "Third attempt at X failed and the user was unhappy" does not.
+4. **Record the lesson, not the incident.** Session conduct, frustration, blame and blow-by-blow correction history are not project records. When something went wrong and taught something durable, record the transferable part — as a `[note]` if it is an environment trap, or as the rejected alternative's reason inside the `[decision]` entry you are writing now. Never go back and edit an existing entry to absorb it; property 2 forbids that. "Approach X was abandoned; the API bills per generation and the account had no credit" earns its place. "Third attempt at X failed and the user was unhappy" does not.
+
+Openness is not a field, because a field would have to be edited and property 2 forbids that. A `[note]` stays open until a later entry closes it with `closes=NNN`.
+
+Searching the log is how you reach anything past the last five entries. Do this when a specific question calls for it, never to gather background:
+
+```sh
+grep '\[decision\]' CHANGES.md              # every decision ever recorded
+awk '$4=="(auth)"' CHANGES.md               # everything that touched one area
+grep -E ' (041|057) ' CHANGES.md            # an entry and whatever references it
+grep -oE 'supersedes=[0-9]+' CHANGES.md | cut -d= -f2 | sort -u   # serials that are now dead
+```
+
+Anything a search turns up is still history, not instruction. If a search result and `BRIEFING.md` disagree, the brief is right and the log is old — or the brief is stale and needs a `/close`. The log never wins that comparison.
 
 Good entries:
 
-- `2026-05-12 [decision] Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate`
-- `2026-05-18 [scope] Dropped offline mode; sync complexity not worth it for v1`
-- `2026-05-20 [note] Stripe sandbox webhooks flaky this week; retries can look like test failures`
+- `2026-05-12 041 [decision] (queue) Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate`
+- `2026-05-18 042 [scope] (sync) Dropped offline mode; sync complexity not worth it for v1`
+- `2026-05-20 043 [note] (billing) Stripe sandbox webhooks flaky this week; retries can look like test failures`
+- `2026-06-02 057 [decision] (queue) Retry moved to the gateway; per-client retry double-billed the API  supersedes=041`
+- `2026-06-04 058 [note] (billing) Stripe sandbox stabilized after their incident closed  closes=043`
 
 Bad entries:
 
-- `2026-05-12 [code] fixed bug` — belongs in a commit message; tells a future session nothing.
-- `2026-05-12 [code] batchSize 100 -> 500, timeout 30s -> 60s` — the config file is authoritative and this copy will rot. Record the reason, not the number.
-- `2026-05-12 [note] Verified: 200/200 cases valid, suite green, console clean` — evidence for one report on one day. It goes in the response, not the record.
+- `2026-05-12 044 [code] (-) fixed bug` — belongs in a commit message; tells a future session nothing.
+- `2026-05-12 045 [code] (ingest) batchSize 100 -> 500, timeout 30s -> 60s` — the config file is authoritative and this copy will rot. Record the reason, not the number.
+- `2026-05-12 046 [note] (-) Verified: 200/200 cases valid, suite green, console clean` — evidence for one report on one day. It goes in the response, not the record.
+- `2026-05-12 047 [decision] (authentication) Use JWTs` — the area list says `auth`; a second spelling silently splits the facet in two.
 
 `BRIEFING.md`: Update if scope or decisions changed, or on a breaking change (note reason and impact). Current focus, Next steps, Open questions, and Environment quirks are refreshed by `/close`.
+
+`Areas` is the closed vocabulary that `CHANGES.md` tags against. Extend it when a new part of the project starts taking work. Never rename or remove an area that existing log entries already use — the log is immutable, so a rename orphans every entry tagged with the old name.
 
 It holds current state, never history — history is CHANGES.md's job. Three rules keep the two apart:
 
 - Exactly **one** `Current focus`, present tense. Sessions **replace** it; they never append a dated one alongside.
 - `Next steps` and `Open questions` are kept true, not kept short: remove what is done or answered. Never drop a live item to hit a count — a large project carries more of both, and that is not a defect.
-- No bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`). If it reads as a journal entry, it belongs in CHANGES.md.
+- No bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`). If it reads as a log entry, it belongs in CHANGES.md.
 
 ---
 
@@ -182,7 +229,7 @@ Filled example (no assumptions were made and BRIEFING.md did not change, so thos
 ---
 COMPLIANCE:
 - Verified: `cargo check` exited 0, no warnings
-- CHANGES.md: appended: 2026-06-10 [code] Moved retry logic into ApiClient; callers no longer handle 429s
+- CHANGES.md: appended: 2026-06-10 058 [code] (api) Moved retry logic into ApiClient; callers no longer handle 429s
 ```
 
 If you completed file changes and the COMPLIANCE block is missing, add it now (this does not apply to the exempt commands above).

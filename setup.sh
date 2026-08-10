@@ -134,13 +134,13 @@ install_codex() {
     echo "Wrote $dst."
   fi
   install_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read or create BRIEFING.md and CHANGES.md and confirm readiness at session start, with the Code craft module active."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 CHANGES.md entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
   install_skill klaude klaude.md \
     "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   install_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: record decisions and scope changes to CHANGES.md and update BRIEFING.md before ending work."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the CHANGES.md log, update BRIEFING.md, and compact the log before ending work."
   install_skill compresschanges compresschanges.md \
-    "Run only when explicitly invoked. Klawde journal compaction: drop expired entries, fold superseded decisions, and summarize old history in CHANGES.md while preserving live decisions, scope changes and open findings."
+    "Run only when explicitly invoked. Klawde log compaction (also run automatically by /close): drop entries that were never durable records and collapse history past the 100-entry ceiling into monthly summaries, never deleting a live decision, scope change or open finding."
 }
 
 case "$TARGET" in

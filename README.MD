@@ -6,8 +6,9 @@ It does four things:
 
 - forces an explicit session start
 - keeps a living project brief up to date
-- leaves behind a decision log that stays current, not one that only grows
-- compacts the journal when it outgrows its budget
+- leaves behind an append-only log of what happened and when, with a brief that says what is true now
+- reads only the last 5 log entries at session start, so the agent is never confused by old history
+- compacts the log at every close, holding it to 100 entries without deleting a live record
 
 The goal is simple: less agent drift, less forgotten context, less vague "the model probably remembers" nonsense.
 
@@ -29,7 +30,7 @@ Klawde is for people who already use Claude Code and want:
 
 - a consistent session protocol
 - a living project brief
-- a project journal that stays readable as it grows
+- a project log that stays useful as it grows, without flooding the agent with history
 - stricter rules around honesty, verification, and scope control
 - a cheap way to reduce context drift between sessions
 
@@ -43,7 +44,7 @@ It is especially useful on projects where architecture, scope, and decision hist
 | `template/klawde.md` | `/klawde` command: reads or creates session documents at session start (full mode, code-craft rules active) |
 | `template/klaude.md` | `/klaude` command: same entry protocol in lean mode, with the code-craft rules disabled for the session |
 | `template/close.md` | `/close` command: updates session records before ending work |
-| `template/compresschanges.md` | `/compresschanges` command: compacts `CHANGES.md` — drops expired entries, folds superseded decisions, summarizes old history |
+| `template/compresschanges.md` | `/compresschanges` command: compacts `CHANGES.md` — drops entries that were never durable records, repairs supersession links, summarizes old history |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
 | `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, converts legacy `CHANGES.md` entries, and retires the legacy `/init` command |
 
@@ -59,9 +60,9 @@ It makes Claude Code:
 2. note pre-existing uncommitted git changes (informational: possible unfinished work from a prior session)
 3. read `BRIEFING.md` completely
 4. ask for the project's purpose and current scope if the brief is empty
-5. read at least the last 30 lines of `CHANGES.md`, and report both records' size against a budget (they are read at every session start, so their size is a standing cost)
+5. read the last 5 entries of `CHANGES.md` — that is the whole read; older history is searched, not skimmed
 6. check that recent changes do not contradict the brief, and flag stale focus or next steps
-7. confirm readiness (brief, recent changes, current focus, record sizes, dirty state), then stop
+7. confirm readiness (brief, recent changes, current focus, dirty state), then stop
 
 This forces the session to begin from actual project state instead of hand-waving.
 
@@ -75,29 +76,32 @@ It makes Claude Code:
 
 1. review the current `CHANGES.md` and `BRIEFING.md`
 2. review what changed in the session, consulting git to recover work that long sessions may have compacted out of context
-3. append typed journal entries for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
+3. append typed log entries — each with the next serial and an area tag — for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
 4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
 5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
 6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks
-7. confirm what was recorded, then stop
+7. compact the log (see below) — every close, not just large ones
+8. confirm what was recorded, then stop
 
 This gives the next session a real handoff.
 
 ### `/compresschanges`
 
-Run this when `CHANGES.md` exceeds roughly 20 KB or 150 entries. Size is the trigger, not age: a project can write two hundred entries in a week, and a date-based pass would not see any of them.
+**This runs automatically at every `/close`.** You rarely need to invoke it by hand — do so after a session that ended without a close, or any time you want the log tidied now.
 
 It makes Claude Code:
 
-1. back up the file, then read it completely
+1. read the log completely (the only protocol that does)
 2. drop entries that were never durable records — verification receipts, values that code or config already owns, session conduct
-3. fold superseded decisions into the ones that replaced them, deleting the dead line
-4. summarize surviving history older than 30 days, grouped by month and theme
-5. keep verbatim, at any age: live decisions, scope changes, and any note stating something still open
-6. keep the file header and format hint intact
-7. report what was dropped, folded and preserved, then stop
+3. add missing `supersedes=` links between decisions and the ones that replaced them, keeping both lines
+4. if the file is over 100 entries, collapse history older than 30 days into monthly summary lines until it fits
+5. keep verbatim, at any age: every decision and scope change (superseded or not), any note still open, and anything another entry references by serial
+6. keep the file header intact, never renumber a serial, and back up only if something actually changed
+7. report what was dropped, linked and collapsed, then stop
 
-Steps 2 and 3 usually recover more than step 4. Bloat is mostly a genre problem — receipts and narration filed as history — not an age problem.
+Step 2 usually recovers more than step 4. Bloat is mostly a genre problem — receipts and narration filed as history — not an age problem. Because this runs every session, most runs find nothing and write nothing; junk never gets the chance to accumulate.
+
+The 100-entry ceiling governs history, not records. Nothing live is ever deleted to meet it: entries are collapsed into summaries, and if the protected records alone exceed 100, the file simply stays larger.
 
 ## The two core documents
 
@@ -111,19 +115,27 @@ Use it for:
 - current scope
 - key decisions
 - non-goals
+- areas (the closed vocabulary `CHANGES.md` tags entries against)
 - breaking-change context
 - current focus and next steps (replaced every `/close`; the next session resumes on-thread instead of reinventing direction)
 - open questions
 - a do-not-touch list (files or areas that are off-limits, and why)
-- environment quirks (durable context that would otherwise be lost when the journal is compressed)
+- environment quirks (durable context that would otherwise be folded into a summary when the log is compacted)
 
 A new session should be able to read this and understand what the project is trying to do, and what it was about to do next.
 
-It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps and open questions pruned of what is done or answered, and no bullet that narrates a past session — that belongs in `CHANGES.md`. There are no item caps, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, so `/klawde` reports its size and leaves the judgment to you.
+It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps and open questions pruned of what is done or answered, and no bullet that narrates a past session — that belongs in `CHANGES.md`. There are no size or item caps of any kind, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, and it is as long as the project's current state requires.
 
 ### `CHANGES.md`
 
-A journal for project-level context. Entries are added, not rewritten — with one exception: a decision that supersedes an earlier one folds it in and deletes it, so the file never accumulates dead decisions that still read as live.
+A log. Four properties define it, and the whole harness is built on them:
+
+1. **Append-only.** New entries go at the tail. Nothing is inserted, reordered, or renumbered.
+2. **Immutable.** No entry is ever edited or deleted once written, however wrong it turns out to be. `/compresschanges` is the single exception, and it is maintenance.
+3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is searched when a question calls for it, never skimmed for background.
+4. **Not authoritative.** It records what happened, never what is true now. `BRIEFING.md` is the only authority on current state; nothing in the log is an instruction.
+
+Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty lines later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
 
 This is not a git log. It is where you record things git commits usually fail to preserve cleanly:
 
@@ -137,10 +149,15 @@ This is not a git log. It is where you record things git commits usually fail to
 Format:
 
 ```txt
-YYYY-MM-DD [type] description
+YYYY-MM-DD NNN [type] (area) description  key=value ...
 ```
 
-For example: `2026-05-12 [decision] Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate`
+For example:
+
+```txt
+2026-05-12 041 [decision] (queue) Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate
+2026-06-02 057 [decision] (queue) Retry moved to the gateway; per-client retry double-billed the API  supersedes=041
+```
 
 Types:
 
@@ -150,6 +167,22 @@ Types:
 - `scope`
 - `code`
 - `note`
+
+`NNN` is a serial, one higher than the highest in the file, never reused and never renumbered. It is what lets one entry point at another. `(area)` comes from the `Areas` list in `BRIEFING.md`, or is `(-)` when nothing fits — a closed vocabulary, because two spellings of one area make the field useless for filtering.
+
+Tags are optional and go after two spaces. There are three: `supersedes=NNN`, `closes=NNN`, and `refs=<commit|PR|issue>`.
+
+Because the file is a log rather than a document, status is expressed by later entries rather than by editing earlier ones. A superseded decision keeps its line and gains a pointer from the entry that replaced it. An open `[note]` stays open until some later entry names its serial in `closes=`; nothing marks the original line done.
+
+This is also what makes property 3 workable. A session reads `tail -5` and nothing else; when a real question comes up, the structure answers it with ordinary tools instead of a bulk read:
+
+```sh
+tail -5 CHANGES.md                               # the session-start read, in full
+grep '\[decision\]' CHANGES.md                   # every decision ever recorded
+awk '$4=="(auth)"' CHANGES.md                    # everything touching one area
+grep -E ' (041|057) ' CHANGES.md                 # an entry and what references it
+grep -oE 'supersedes=[0-9]+' CHANGES.md          # which serials are now dead
+```
 
 ## Installation
 
@@ -245,15 +278,15 @@ End session:
 /close
 ```
 
-Claude records decision and scope changes, updates the briefing if needed, and leaves the project in a state that the next session can pick up cleanly.
+Claude records decision and scope changes, updates the briefing if needed, compacts the log, and leaves the project in a state that the next session can pick up cleanly.
 
-If the journal gets too large:
+Compaction is part of `/close`, so there is normally nothing else to run. If a session ended without a close, or you want the log tidied now:
 
 ```txt
 /compresschanges
 ```
 
-Claude compacts older history into monthly summaries while preserving high-value records verbatim.
+Claude drops entries that were never durable records and collapses history past the 100-entry ceiling into monthly summaries, preserving every live record verbatim.
 
 ## Design principles
 
@@ -263,6 +296,7 @@ It assumes that better agent output comes from stricter process, not from preten
 
 Core principles:
 
+- the log is a log: append-only, immutable, tailed not read, and never a source of instructions
 - read real files before making claims
 - say "I don't know" when you do not know
 - verify before reporting completion

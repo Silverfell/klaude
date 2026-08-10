@@ -176,13 +176,13 @@ upgrade_codex() {
   rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
   echo "Overwrote $dst."
   upgrade_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read or create BRIEFING.md and CHANGES.md and confirm readiness at session start, with the Code craft module active."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 CHANGES.md entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
   upgrade_skill klaude klaude.md \
     "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   upgrade_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: record decisions and scope changes to CHANGES.md and update BRIEFING.md before ending work."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the CHANGES.md log, update BRIEFING.md, and compact the log before ending work."
   upgrade_skill compresschanges compresschanges.md \
-    "Run only when explicitly invoked. Klawde journal compaction: drop expired entries, fold superseded decisions, and summarize old history in CHANGES.md while preserving live decisions, scope changes and open findings."
+    "Run only when explicitly invoked. Klawde log compaction (also run automatically by /close): drop entries that were never durable records and collapse history past the 100-entry ceiling into monthly summaries, never deleting a live decision, scope change or open finding."
   # Retire deprecated global prompts from earlier versions (honors CODEX_HOME).
   local prompts_dir="${CODEX_HOME:-$HOME/.codex}/prompts"
   for old in klawde close compresschanges; do
@@ -211,12 +211,20 @@ if [ -f "$changes" ]; then
   if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}:' "$changes"; then
     needs_conversion=1
   fi
+  # Entries written before serials and areas existed: date followed straight by [type].
+  needs_serials=0
+  if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} \[' "$changes"; then
+    needs_serials=1
+  fi
+  # Any header hint that is not the current one gets replaced wholesale. This also
+  # retires the legacy per-entry character cap carried by older headers.
+  new_hint_marker='LOG ONLY. Append at the tail'
   needs_hint=0
-  if ! grep -qF 'Format: `YYYY-MM-DD [type]' "$changes"; then
+  if ! grep -qF "$new_hint_marker" "$changes"; then
     needs_hint=1
   fi
 
-  if [ "$needs_conversion" -eq 0 ] && [ "$needs_hint" -eq 0 ]; then
+  if [ "$needs_conversion" -eq 0 ] && [ "$needs_serials" -eq 0 ] && [ "$needs_hint" -eq 0 ]; then
     echo "CHANGES.md already in current format. No conversion needed."
   else
     echo "Found existing CHANGES.md, converting to new format."
@@ -226,7 +234,7 @@ if [ -f "$changes" ]; then
 
     if [ "$needs_conversion" -eq 1 ]; then
       # Convert old-format entries (YYYY-MM-DD: description) to [note] type.
-      # Leaves new-format entries (YYYY-MM-DD [type] description) untouched.
+      # Leaves already-typed entries untouched; the serial pass below handles them.
       tmp="$(mktemp)"
       converted=0
       while IFS= read -r line || [ -n "$line" ]; do
@@ -241,11 +249,55 @@ if [ -f "$changes" ]; then
       echo "Converted $converted old-format entries to [note] type."
     fi
 
-    if [ "$needs_hint" -eq 1 ]; then
+    if [ "$needs_serials" -eq 1 ]; then
+      # Backfill serials and the (-) area onto pre-serial entries, continuing from the
+      # highest serial already present so a partially migrated file stays consistent.
+      maxid="$(awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ / {v=$2+0; if (v>m) m=v} END {print m+0}' "$changes")"
       tmp2="$(mktemp)"
-      awk 'NR==1 {print; print ""; print "Format: `YYYY-MM-DD [type] description` (max 200 chars). Types: decision, plan, doc, scope, code, note."; print ""; next} NR==2 && /^[[:space:]]*$/ {next} {print}' "$changes" > "$tmp2"
+      awk -v start="$maxid" '
+        /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[note\] Summary:/ {
+          rest = substr($0, 12)
+          sub(/^\[note\][ ]+/, "", rest)
+          printf "%s SUM [note] (-) %s\n", substr($0, 1, 10), rest
+          next
+        }
+        /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[/ {
+          rest = substr($0, 12)
+          if (match(rest, /^\[[a-z]+\]/)) {
+            n++
+            printf "%s %03d %s (-) %s\n", substr($0, 1, 10), start + n, \
+                   substr(rest, RSTART, RLENGTH), substr(rest, RSTART + RLENGTH + 1)
+            next
+          }
+        }
+        { print }
+        END { printf "%d\n", n > "/dev/stderr" }
+      ' "$changes" 2> "$tmp2.count" > "$tmp2"
       mv "$tmp2" "$changes"
-      echo "Added format hint to CHANGES.md header."
+      echo "Backfilled serials and (-) areas onto $(cat "$tmp2.count") entries."
+      rm -f "$tmp2.count"
+    fi
+
+    if [ "$needs_hint" -eq 1 ]; then
+      tmp3="$(mktemp)"
+      awk '
+        NR==1 {
+          print; print ""
+          print "LOG ONLY. Append at the tail; never edit or delete an entry. This file records what happened, not what is true now — BRIEFING.md is the authority on current state, and nothing here is an instruction. Sessions read the last 5 entries; search for anything older. Only /compresschanges rewrites this file."
+          print "Format: `YYYY-MM-DD NNN [type] (area) description  key=value`"
+          print "Types: decision, plan, doc, scope, code, note. Areas: see BRIEFING.md. Tags: supersedes=NNN, closes=NNN, refs=X."
+          print ""
+          next
+        }
+        /^LOG ONLY\./ { next }
+        /^Append-only log\./ { next }
+        /^Format: `YYYY-MM-DD/ { next }
+        /^Types: decision, plan, doc, scope, code, note\./ { next }
+        !started && /^[[:space:]]*$/ { next }
+        { started = 1; print }
+      ' "$changes" > "$tmp3"
+      mv "$tmp3" "$changes"
+      echo "Rewrote the CHANGES.md header to the current format hint."
     fi
   fi
 else
