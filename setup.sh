@@ -39,6 +39,15 @@ if [ "$SCRIPT_DIR" = "$TARGET_DIR" ]; then
   exit 1
 fi
 
+# The harness keeps its project log in a SQLite database (changes.db), driven
+# entirely through the sqlite3 CLI. Without it, no session can start.
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "Error: the sqlite3 CLI was not found on PATH." >&2
+  echo "Klawde keeps its project log in changes.db and needs sqlite3 to read and write it." >&2
+  echo "Install it (macOS: preinstalled, or 'brew install sqlite'; Debian/Ubuntu: 'apt install sqlite3'; Fedora: 'dnf install sqlite')." >&2
+  exit 1
+fi
+
 # Prompt for the target if no flag was given.
 if [ -z "$TARGET" ]; then
   echo "Install for:"
@@ -57,16 +66,17 @@ fi
 # Rewrite a template file for the Codex layout, writing to stdout:
 #   - retitle the contract (CLAUDE.md -> AGENTS.md) and its command section
 #   - retarget command paths to skill paths
+#   - retarget the shipped log schema to the Codex layout
 #   - rewrite slash invocations to skill ($name) invocations
 # Each rule is a no-op on files that lack the matched text.
 rewrite_codex() {
   sed -e '1s/^# CLAUDE\.md$/# AGENTS.md/' \
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
+      -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
-      -e 's#`/compresschanges`#`$compresschanges`#g' \
       "$1"
 }
 
@@ -105,7 +115,7 @@ install_claude() {
     cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
     echo "Copied $dst."
   fi
-  for cmd in klawde.md klaude.md close.md compresschanges.md; do
+  for cmd in klawde.md klaude.md close.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -113,6 +123,13 @@ install_claude() {
       echo "Copied $dst."
     fi
   done
+  # The log schema /klawde uses to create changes.db on first run.
+  dst="$TARGET_DIR/.claude/changes-schema.sql"
+  if should_write "$dst"; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
+    echo "Copied $dst."
+  fi
 }
 
 # name | template file | skill description
@@ -134,13 +151,18 @@ install_codex() {
     echo "Wrote $dst."
   fi
   install_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 CHANGES.md entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
   install_skill klaude klaude.md \
     "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   install_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the CHANGES.md log, update BRIEFING.md, and compact the log before ending work."
-  install_skill compresschanges compresschanges.md \
-    "Run only when explicitly invoked. Klawde log compaction (also run automatically by /close): drop entries that were never durable records and collapse history past the 100-entry ceiling into monthly summaries, never deleting a live decision, scope change or open finding."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, update BRIEFING.md, and verify log integrity before ending work."
+  # The log schema $klawde uses to create changes.db on first run.
+  dst="$TARGET_DIR/.agents/changes-schema.sql"
+  if should_write "$dst"; then
+    mkdir -p "$(dirname "$dst")"
+    cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
+    echo "Copied $dst."
+  fi
 }
 
 case "$TARGET" in
@@ -153,11 +175,13 @@ echo ""
 echo "Done. Project initialized at $TARGET_DIR (target: $TARGET)"
 case "$TARGET" in
   claude)
+    echo "Wrote CLAUDE.md, .claude/commands/ and .claude/changes-schema.sql in this project."
     echo "Run /klawde in Claude Code to start a session (or /klaude to start without the code-craft rules)." ;;
   codex)
-    echo "Wrote AGENTS.md and .agents/skills/ in this project."
+    echo "Wrote AGENTS.md, .agents/skills/ and .agents/changes-schema.sql in this project."
     echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session; \$klaude starts without the code-craft rules." ;;
   both)
-    echo "Wrote CLAUDE.md + .claude/commands/ (Claude Code) and AGENTS.md + .agents/skills/ (Codex)."
+    echo "Wrote CLAUDE.md + .claude/ (Claude Code) and AGENTS.md + .agents/ (Codex), including the log schema for each."
     echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session; klaude is the variant without the code-craft rules." ;;
 esac
+echo "The entry protocol creates BRIEFING.md and the changes.db log on its first run; commit changes.db like any other project file."

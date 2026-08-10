@@ -8,7 +8,7 @@ It does four things:
 - keeps a living project brief up to date
 - leaves behind an append-only log of what happened and when, with a brief that says what is true now
 - reads only the last 5 log entries at session start, so the agent is never confused by old history
-- compacts the log at every close, holding it to 100 entries without deleting a live record
+- keeps the entire history in a queryable SQLite log; the agent reads 5 entries at session start and queries the rest on demand
 
 The goal is simple: less agent drift, less forgotten context, less vague "the model probably remembers" nonsense.
 
@@ -44,9 +44,9 @@ It is especially useful on projects where architecture, scope, and decision hist
 | `template/klawde.md` | `/klawde` command: reads or creates session documents at session start (full mode, code-craft rules active) |
 | `template/klaude.md` | `/klaude` command: same entry protocol in lean mode, with the code-craft rules disabled for the session |
 | `template/close.md` | `/close` command: updates session records before ending work |
-| `template/compresschanges.md` | `/compresschanges` command: compacts `CHANGES.md` — drops entries that were never durable records, repairs supersession links, summarizes old history |
+| `template/changes-schema.sql` | The `changes.db` log schema: tables, the triggers that enforce append-only immutability, and the `log_lines` rendering view |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
-| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, converts legacy `CHANGES.md` entries, and retires the legacy `/init` command |
+| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, and retires the legacy `/init` and `/compresschanges` commands |
 
 ## How it works
 
@@ -56,11 +56,11 @@ Run this at the start of every Claude Code session. (The command is named `/klaw
 
 It makes Claude Code:
 
-1. check whether `BRIEFING.md` and `CHANGES.md` exist, create them if missing, and add any brief fields missing from an older install
+1. check whether `BRIEFING.md` and `changes.db` exist, create them if missing (the log from the shipped schema), and add any brief fields missing from an older install
 2. note pre-existing uncommitted git changes (informational: possible unfinished work from a prior session)
 3. read `BRIEFING.md` completely
 4. ask for the project's purpose and current scope if the brief is empty
-5. read the last 5 entries of `CHANGES.md` — that is the whole read; older history is searched, not skimmed
+5. read the last 5 entries of `changes.db` — that is the whole read; older history is queried, not skimmed
 6. check that recent changes do not contradict the brief, and flag stale focus or next steps
 7. confirm readiness (brief, recent changes, current focus, dirty state), then stop
 
@@ -74,34 +74,16 @@ Run this at the end of a session. It is also safe to run mid-session as a checkp
 
 It makes Claude Code:
 
-1. review the current `CHANGES.md` and `BRIEFING.md`
+1. read `BRIEFING.md` and the last 5 log entries — the same tail as a session start, never the whole log
 2. review what changed in the session, consulting git to recover work that long sessions may have compacted out of context
-3. append typed log entries — each with the next serial and an area tag — for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
+3. insert typed log entries — the serial and date assign themselves — for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
 4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
 5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
-6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks
-7. compact the log (see below) — every close, not just large ones
+6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks, and the area vocabulary (new areas are added to the brief and the database together)
+7. check the log's integrity: `PRAGMA integrity_check` and the seven triggers that enforce immutability are still in place
 8. confirm what was recorded, then stop
 
 This gives the next session a real handoff.
-
-### `/compresschanges`
-
-**This runs automatically at every `/close`.** You rarely need to invoke it by hand — do so after a session that ended without a close, or any time you want the log tidied now.
-
-It makes Claude Code:
-
-1. read the log completely (the only protocol that does)
-2. drop entries that were never durable records — verification receipts, values that code or config already owns, session conduct
-3. add missing `supersedes=` links between decisions and the ones that replaced them, keeping both lines
-4. if the file is over 100 entries, collapse history older than 30 days into monthly summary lines until it fits
-5. keep verbatim, at any age: every decision and scope change (superseded or not), any note still open, and anything another entry references by serial
-6. keep the file header intact, never renumber a serial, and back up only if something actually changed
-7. report what was dropped, linked and collapsed, then stop
-
-Step 2 usually recovers more than step 4. Bloat is mostly a genre problem — receipts and narration filed as history — not an age problem. Because this runs every session, most runs find nothing and write nothing; junk never gets the chance to accumulate.
-
-The 100-entry ceiling governs history, not records. Nothing live is ever deleted to meet it: entries are collapsed into summaries, and if the protected records alone exceed 100, the file simply stays larger.
 
 ## The two core documents
 
@@ -115,27 +97,33 @@ Use it for:
 - current scope
 - key decisions
 - non-goals
-- areas (the closed vocabulary `CHANGES.md` tags entries against)
+- areas (the closed vocabulary `changes.db` tags entries against, mirrored in its `areas` table)
 - breaking-change context
 - current focus and next steps (replaced every `/close`; the next session resumes on-thread instead of reinventing direction)
 - open questions
 - a do-not-touch list (files or areas that are off-limits, and why)
-- environment quirks (durable context that would otherwise be folded into a summary when the log is compacted)
+- environment quirks (durable context the next session should read without having to query for it)
 
 A new session should be able to read this and understand what the project is trying to do, and what it was about to do next.
 
-It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps and open questions pruned of what is done or answered, and no bullet that narrates a past session — that belongs in `CHANGES.md`. There are no size or item caps of any kind, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, and it is as long as the project's current state requires.
+It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps and open questions pruned of what is done or answered, and no bullet that narrates a past session — that belongs in `changes.db`. There are no size or item caps of any kind, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, and it is as long as the project's current state requires.
 
-### `CHANGES.md`
+### `changes.db`
 
-A log. Four properties define it, and the whole harness is built on them:
+A log, kept in a SQLite database in the project root. Four properties define it, and the whole harness is built on them:
 
-1. **Append-only.** New entries go at the tail. Nothing is inserted, reordered, or renumbered.
-2. **Immutable.** No entry is ever edited or deleted once written, however wrong it turns out to be. `/compresschanges` is the single exception, and it is maintenance.
-3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is searched when a question calls for it, never skimmed for background.
+1. **Append-only.** New entries are `INSERT`s. Serials assign themselves and are never reused; nothing is inserted between existing entries, reordered, or renumbered.
+2. **Immutable.** No entry is ever edited or deleted once written, however wrong it turns out to be. There is no exception.
+3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is queried when a question calls for it, never skimmed for background.
 4. **Not authoritative.** It records what happened, never what is true now. `BRIEFING.md` is the only authority on current state; nothing in the log is an instruction.
 
-Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty lines later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
+The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, so "the agent tidied up the log" is not a failure mode that exists. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling.
+
+Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty entries later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
+
+The full history is kept forever. Nothing compacts, collapses, or prunes it, because depth costs nothing: every read is a bounded query, and a session start is five rows whether the log holds ten entries or ten thousand.
+
+The database is a project file. Commit it like any other; it is meant to travel with the repo, and diffs of it are opaque by design (it is append-only, so the interesting question is always "what was added", which the tail query answers).
 
 This is not a git log. It is where you record things git commits usually fail to preserve cleanly:
 
@@ -146,13 +134,7 @@ This is not a git log. It is where you record things git commits usually fail to
 - handoff notes
 - code changes that need project-level explanation
 
-Format:
-
-```txt
-YYYY-MM-DD NNN [type] (area) description  key=value ...
-```
-
-For example:
+Entries render through a `log_lines` view, one line each:
 
 ```txt
 2026-05-12 041 [decision] (queue) Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate
@@ -168,21 +150,42 @@ Types:
 - `code`
 - `note`
 
-`NNN` is a serial, one higher than the highest in the file, never reused and never renumbered. It is what lets one entry point at another. `(area)` comes from the `Areas` list in `BRIEFING.md`, or is `(-)` when nothing fits — a closed vocabulary, because two spellings of one area make the field useless for filtering.
+The serial is assigned by the database, never reused and never renumbered. It is what lets one entry point at another. The area comes from the `Areas` list in `BRIEFING.md`, or is `-` when nothing fits.
 
-Tags are optional and go after two spaces. There are three: `supersedes=NNN`, `closes=NNN`, and `refs=<commit|PR|issue>`.
-
-Because the file is a log rather than a document, status is expressed by later entries rather than by editing earlier ones. A superseded decision keeps its line and gains a pointer from the entry that replaced it. An open `[note]` stays open until some later entry names its serial in `closes=`; nothing marks the original line done.
-
-This is also what makes property 3 workable. A session reads `tail -5` and nothing else; when a real question comes up, the structure answers it with ordinary tools instead of a bulk read:
+Writing an entry is one statement, and the serial and date fill themselves:
 
 ```sh
-tail -5 CHANGES.md                               # the session-start read, in full
-grep '\[decision\]' CHANGES.md                   # every decision ever recorded
-awk '$4=="(auth)"' CHANGES.md                    # everything touching one area
-grep -E ' (041|057) ' CHANGES.md                 # an entry and what references it
-grep -oE 'supersedes=[0-9]+' CHANGES.md          # which serials are now dead
+sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('decision','queue','Retry moved to the gateway; per-client retry double-billed the API');"
 ```
+
+Because it is a log rather than a document, status is expressed by later entries rather than by editing earlier ones — and relationships live in their own append-only `links` table, so recording one is an insert, never an edit:
+
+```sh
+sqlite3 changes.db "INSERT INTO links VALUES (57, 41, 'supersedes');"
+```
+
+A superseded decision keeps its entry and gains a pointer from the one that replaced it. An open `[note]` stays open until some later entry links to it with `closes`; nothing marks the original done.
+
+This is also what makes property 3 workable. A session reads five rows and nothing else; when a real question comes up, the log answers it directly:
+
+```sh
+# the session-start read, in full
+sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LIMIT 5;"
+# every decision ever recorded
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries WHERE type='decision');"
+# everything touching one area
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries WHERE area='auth');"
+# an entry and what references it
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT from_serial FROM links WHERE to_serial=41) OR serial=41;"
+# notes still open (no later entry closes them)
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='note' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='closes'));"
+# live decisions (never superseded)
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='decision' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='supersedes'));"
+```
+
+The last two are the ones a text file could never answer in a single pass: "which findings are still open" and "which decisions still hold" both require knowing what *later* entries did to an earlier one, which is a join, not a grep. Under the old text log they were approximated by reading the whole file — which is exactly what property 3 forbids.
+
+Requirements: the `sqlite3` CLI. It is preinstalled on macOS and packaged as `sqlite3` on every mainstream Linux distribution. Nothing else — no server, no extension, no Python.
 
 ## Installation
 
@@ -213,19 +216,21 @@ For Claude Code, that copies into the current project:
 - `.claude/commands/klawde.md`
 - `.claude/commands/klaude.md`
 - `.claude/commands/close.md`
-- `.claude/commands/compresschanges.md`
+- `.claude/changes-schema.sql`
 
-For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$klaude`, `$close`, and `$compresschanges` (or picked from `/skills`):
+For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$klaude`, and `$close` (or picked from `/skills`):
 
 - `AGENTS.md`
 - `.agents/skills/klawde/SKILL.md`
 - `.agents/skills/klaude/SKILL.md`
 - `.agents/skills/close/SKILL.md`
-- `.agents/skills/compresschanges/SKILL.md`
+- `.agents/changes-schema.sql`
 
 Skills replace Codex custom prompts, which OpenAI has deprecated.
 
-The `both` option installs both layouts at once: `CLAUDE.md` and `.claude/commands/` for Claude Code, plus `AGENTS.md` and `.agents/skills/` for Codex.
+The `both` option installs both layouts at once: `CLAUDE.md` and `.claude/` for Claude Code, plus `AGENTS.md` and `.agents/` for Codex, each with its own copy of the log schema.
+
+Setup requires the `sqlite3` CLI on your PATH and stops with an install hint if it is missing. It does not create the log itself: `BRIEFING.md` and `changes.db` are created by the entry protocol on its first run.
 
 Then start your tool and run the entry protocol:
 
@@ -252,12 +257,28 @@ It then asks whether to create `.bak` backups before overwriting. Answer `n` and
 
 The upgrade script also:
 
-- overwrites the harness files with the latest versions (Claude, Codex, or both layouts)
+- overwrites the harness files with the latest versions (Claude, Codex, or both layouts), including the log schema
 - removes the legacy `.claude/commands/init.md` (Claude installs only; the entry protocol is now `/klawde`)
+- removes the retired `/compresschanges` command and its Codex skill (the log is never compacted now)
 - removes deprecated Codex prompts from earlier versions in `$CODEX_HOME/prompts/` (defaulting to `~/.codex/prompts/`)
-- converts legacy `CHANGES.md` lines from `YYYY-MM-DD: description` to `YYYY-MM-DD [note] description`
-- adds the format hint to `CHANGES.md` if it is missing
+- migrates a legacy text `CHANGES.md` into `changes.db` (see below)
 - backs up every file it overwrites or removes first, unless you decline backups
+
+### Migrating `CHANGES.md` into `changes.db`
+
+This runs once, on the first upgrade after the log became a database. If `changes.db` already exists the step reports that and does nothing.
+
+The migration:
+
+1. normalizes legacy line formats first — old `YYYY-MM-DD: description` entries become `[note]` entries, and entries written before serials and areas existed get both backfilled
+2. seeds the `areas` table from the brief's `- Areas:` line and from every area any entry actually used
+3. imports every numbered entry with its **original serial**, date, type, area, description and `refs`, inside one transaction
+4. imports `supersedes=` / `closes=` tags as rows in the `links` table. A tag pointing at a serial an old compaction collapsed away has nothing to link to; it is skipped and reported, rather than aborting the import
+5. moves any `SUM` summary lines from old compaction runs into a `legacy_summaries` table, so nothing from the text file is thrown away
+6. verifies that the entry count and highest serial in the database match the file. On any mismatch it deletes the database, leaves `CHANGES.md` untouched, and exits nonzero
+7. on success, renames `CHANGES.md` to `CHANGES.md.migrated` and adds that name to `.gitignore`
+
+Delete `CHANGES.md.migrated` once you are satisfied with the database, and commit `changes.db`.
 
 ## Example workflow
 
@@ -278,15 +299,9 @@ End session:
 /close
 ```
 
-Claude records decision and scope changes, updates the briefing if needed, compacts the log, and leaves the project in a state that the next session can pick up cleanly.
+Claude records decision and scope changes, updates the briefing if needed, checks the log's integrity, and leaves the project in a state that the next session can pick up cleanly.
 
-Compaction is part of `/close`, so there is normally nothing else to run. If a session ended without a close, or you want the log tidied now:
-
-```txt
-/compresschanges
-```
-
-Claude drops entries that were never durable records and collapses history past the 100-entry ceiling into monthly summaries, preserving every live record verbatim.
+There is nothing else to run. The log is never maintained, tidied, or compacted — it keeps everything, and the reads stay bounded regardless.
 
 ## Design principles
 

@@ -44,6 +44,15 @@ if [ "$SCRIPT_DIR" = "$TARGET_DIR" ]; then
   exit 1
 fi
 
+# The harness keeps its project log in a SQLite database (changes.db), driven
+# entirely through the sqlite3 CLI. The migration below also needs it.
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "Error: the sqlite3 CLI was not found on PATH." >&2
+  echo "Klawde keeps its project log in changes.db and needs sqlite3 to read, write and migrate it." >&2
+  echo "Install it (macOS: preinstalled, or 'brew install sqlite'; Debian/Ubuntu: 'apt install sqlite3'; Fedora: 'dnf install sqlite')." >&2
+  exit 1
+fi
+
 # Detect an existing install to offer as the default selection. Both contract
 # files present means a combined install.
 has_claude=0
@@ -112,10 +121,10 @@ rewrite_codex() {
   sed -e '1s/^# CLAUDE\.md$/# AGENTS.md/' \
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
+      -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
-      -e 's#`/compresschanges`#`$compresschanges`#g' \
       "$1"
 }
 
@@ -143,19 +152,32 @@ upgrade_claude() {
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
   echo "Overwrote $dst."
-  for cmd in klawde.md klaude.md close.md compresschanges.md; do
+  for cmd in klawde.md klaude.md close.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if [ -f "$dst" ]; then maybe_backup "$dst"; fi
     mkdir -p "$(dirname "$dst")"
     cp "$SCRIPT_DIR/template/$cmd" "$dst"
     echo "Overwrote $dst."
   done
+  # The log schema /klawde uses to create changes.db on first run.
+  dst="$TARGET_DIR/.claude/changes-schema.sql"
+  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
+  echo "Overwrote $dst."
   # Retire the legacy /init command (entry protocol is now /klawde).
   local legacy_init="$TARGET_DIR/.claude/commands/init.md"
   if [ -f "$legacy_init" ]; then
     maybe_backup "$legacy_init"
     rm "$legacy_init"
     echo "Removed legacy .claude/commands/init.md."
+  fi
+  # Retire /compresschanges (the log is never compacted now).
+  local legacy_compress="$TARGET_DIR/.claude/commands/compresschanges.md"
+  if [ -f "$legacy_compress" ]; then
+    maybe_backup "$legacy_compress"
+    rm "$legacy_compress"
+    echo "Removed retired .claude/commands/compresschanges.md."
   fi
 }
 
@@ -176,13 +198,25 @@ upgrade_codex() {
   rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
   echo "Overwrote $dst."
   upgrade_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 CHANGES.md entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
+    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
   upgrade_skill klaude klaude.md \
     "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
   upgrade_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the CHANGES.md log, update BRIEFING.md, and compact the log before ending work."
-  upgrade_skill compresschanges compresschanges.md \
-    "Run only when explicitly invoked. Klawde log compaction (also run automatically by /close): drop entries that were never durable records and collapse history past the 100-entry ceiling into monthly summaries, never deleting a live decision, scope change or open finding."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, update BRIEFING.md, and verify log integrity before ending work."
+  # The log schema $klawde uses to create changes.db on first run.
+  dst="$TARGET_DIR/.agents/changes-schema.sql"
+  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
+  echo "Overwrote $dst."
+  # Retire the compresschanges skill (the log is never compacted now).
+  local legacy_skill="$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
+  if [ -f "$legacy_skill" ]; then
+    maybe_backup "$legacy_skill"
+    rm "$legacy_skill"
+    rmdir "$(dirname "$legacy_skill")" 2>/dev/null || true
+    echo "Removed retired .agents/skills/compresschanges/SKILL.md."
+  fi
   # Retire deprecated global prompts from earlier versions (honors CODEX_HOME).
   local prompts_dir="${CODEX_HOME:-$HOME/.codex}/prompts"
   for old in klawde close compresschanges; do
@@ -201,12 +235,28 @@ case "$TARGET" in
   both)   upgrade_claude; upgrade_codex ;;
 esac
 
-# Convert existing CHANGES.md to new typed format (target-agnostic; runs once).
+# ---------------------------------------------------------------------------
+# Migrate a legacy text CHANGES.md into the changes.db log (runs once).
+# Target-agnostic: the log lives in the project root under either layout.
+# ---------------------------------------------------------------------------
 changes="$TARGET_DIR/CHANGES.md"
-if [ -f "$changes" ]; then
-  echo ""
+db="$TARGET_DIR/changes.db"
+schema="$SCRIPT_DIR/template/changes-schema.sql"
 
-  # Detect whether any work is needed before backing up or rewriting
+echo ""
+if [ -f "$db" ]; then
+  echo "changes.db is already present. Log migration already done; skipped."
+  if [ -f "$changes" ]; then
+    echo "A CHANGES.md is also present but was not touched; changes.db is the live log."
+  fi
+elif [ ! -f "$changes" ]; then
+  echo "No CHANGES.md and no changes.db found. /klawde creates changes.db on its next run."
+elif [ ! -f "$schema" ]; then
+  echo "Error: $schema not found in source; cannot migrate CHANGES.md." >&2
+  exit 1
+else
+  # --- Normalization: bring legacy text formats up to the last text format ---
+  # so the import pass below only has to understand one line shape.
   needs_conversion=0
   if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}:' "$changes"; then
     needs_conversion=1
@@ -216,18 +266,9 @@ if [ -f "$changes" ]; then
   if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} \[' "$changes"; then
     needs_serials=1
   fi
-  # Any header hint that is not the current one gets replaced wholesale. This also
-  # retires the legacy per-entry character cap carried by older headers.
-  new_hint_marker='LOG ONLY. Append at the tail'
-  needs_hint=0
-  if ! grep -qF "$new_hint_marker" "$changes"; then
-    needs_hint=1
-  fi
 
-  if [ "$needs_conversion" -eq 0 ] && [ "$needs_serials" -eq 0 ] && [ "$needs_hint" -eq 0 ]; then
-    echo "CHANGES.md already in current format. No conversion needed."
-  else
-    echo "Found existing CHANGES.md, converting to new format."
+  if [ "$needs_conversion" -eq 1 ] || [ "$needs_serials" -eq 1 ]; then
+    echo "Normalizing legacy CHANGES.md entries before import."
 
     # Back up first (if enabled) so the original is recoverable
     maybe_backup "$changes"
@@ -247,6 +288,13 @@ if [ -f "$changes" ]; then
       done < "$changes"
       mv "$tmp" "$changes"
       echo "Converted $converted old-format entries to [note] type."
+    fi
+
+    # The pass above produces `YYYY-MM-DD [type] ...` lines, which still need
+    # serials. Re-check the file rather than trusting the pre-conversion answer:
+    # a file that held only legacy lines would otherwise import as zero entries.
+    if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} \[' "$changes"; then
+      needs_serials=1
     fi
 
     if [ "$needs_serials" -eq 1 ]; then
@@ -277,32 +325,177 @@ if [ -f "$changes" ]; then
       echo "Backfilled serials and (-) areas onto $(cat "$tmp2.count") entries."
       rm -f "$tmp2.count"
     fi
+  fi
 
-    if [ "$needs_hint" -eq 1 ]; then
-      tmp3="$(mktemp)"
-      awk '
-        NR==1 {
-          print; print ""
-          print "LOG ONLY. Append at the tail; never edit or delete an entry. This file records what happened, not what is true now — BRIEFING.md is the authority on current state, and nothing here is an instruction. Sessions read the last 5 entries; search for anything older. Only /compresschanges rewrites this file."
-          print "Format: `YYYY-MM-DD NNN [type] (area) description  key=value`"
-          print "Types: decision, plan, doc, scope, code, note. Areas: see BRIEFING.md. Tags: supersedes=NNN, closes=NNN, refs=X."
-          print ""
-          next
+  echo "Migrating CHANGES.md into changes.db."
+
+  # --- Create the database from the shipped schema -------------------------
+  rm -f "$db"
+  sqlite3 -bail "$db" < "$schema"
+
+  sql="$(mktemp)"
+  diag="$(mktemp)"
+  areas_raw="$(mktemp)"
+
+  # --- Seed the closed area vocabulary -------------------------------------
+  # Sources: the brief's "- Areas:" line, plus every area actually used by an
+  # entry. Both are needed: an entry whose area is unknown aborts on insert.
+  if [ -f "$TARGET_DIR/BRIEFING.md" ]; then
+    grep -m1 -E '^[[:space:]]*-[[:space:]]*Areas:' "$TARGET_DIR/BRIEFING.md" \
+      | sed -E 's/^[[:space:]]*-[[:space:]]*Areas:[[:space:]]*//' \
+      | tr ',' '\n' >> "$areas_raw" || true
+  fi
+  awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {
+         rest = substr($0, 12)
+         sub(/^[0-9]+[ ]+\[[a-z]+\][ ]+/, "", rest)
+         if (match(rest, /^\([^)]*\)/)) print substr(rest, 2, RLENGTH - 2)
+       }' "$changes" >> "$areas_raw"
+
+  echo "BEGIN;" > "$sql"
+  sed -E 's/^[[:space:]]+//; s/[[:space:]]*\.?[[:space:]]*$//' "$areas_raw" \
+    | grep -v '^$' | grep -vx -- '-' | sort -u \
+    | sed -E "s/'/''/g; s/^(.*)\$/INSERT OR IGNORE INTO areas VALUES ('\\1');/" >> "$sql" || true
+  area_count="$(grep -c '^INSERT OR IGNORE INTO areas' "$sql" || true)"
+
+  # --- Emit entry, summary and link inserts --------------------------------
+  # Links go last: a link naming a serial that has not been inserted yet is
+  # refused by a trigger, which would abort the whole transaction.
+  awk -v Q="'" '
+    function lit(s) { gsub(Q, Q Q, s); return Q s Q }
+    function addlink(f, t, k,   key) {
+      if (f <= t) { diagline[++nd] = "BADLINK entry " f " " k "=" t; nskip++; return }
+      key = f "|" t "|" k
+      if (key in lseen) return
+      lseen[key] = 1
+      nl++; lf[nl] = f; lt[nl] = t; lk[nl] = k
+    }
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {
+      d = substr($0, 1, 10)
+      rest = substr($0, 12)
+      match(rest, /^[0-9]+/)
+      serial = substr(rest, RSTART, RLENGTH) + 0
+      rest = substr(rest, RLENGTH + 2)
+      match(rest, /^\[[a-z]+\]/)
+      type = substr(rest, 2, RLENGTH - 2)
+      rest = substr(rest, RLENGTH + 2)
+      match(rest, /^\([^)]*\)/)
+      area = substr(rest, 2, RLENGTH - 2)
+      desc = substr(rest, RLENGTH + 2)
+      refs = ""
+      # Tags sit at the tail, separated from the description by two spaces
+      # and from each other by one. Peel them off right to left.
+      while (match(desc, /[ ]+(supersedes|closes|refs)=[^ ]+$/)) {
+        tok = substr(desc, RSTART, RLENGTH)
+        desc = substr(desc, 1, RSTART - 1)
+        sub(/^[ ]+/, "", tok)
+        p = index(tok, "=")
+        k = substr(tok, 1, p - 1)
+        v = substr(tok, p + 1)
+        if (k == "refs") refs = v
+        else addlink(serial, v + 0, k)
+      }
+      sub(/[ ]+$/, "", desc)
+      if (desc == "") desc = "(no description)"
+      if (area == "") area = "-"
+      seen[serial] = 1
+      n++
+      if (serial > maxs) maxs = serial
+      printf "INSERT INTO entries (serial,date,type,area,description,refs) VALUES (%d,%s,%s,%s,%s,%s);\n", \
+             serial, lit(d), lit(type), lit(area), lit(desc), (refs == "" ? "NULL" : lit(refs))
+      next
+    }
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] SUM \[[a-z]+\]/ {
+      d = substr($0, 1, 10)
+      rest = substr($0, 12)
+      sub(/^SUM[ ]+\[[a-z]+\][ ]+/, "", rest)
+      area = "-"
+      if (match(rest, /^\([^)]*\)/)) {
+        area = substr(rest, 2, RLENGTH - 2)
+        rest = substr(rest, RLENGTH + 2)
+      }
+      if (rest == "") rest = "(empty summary)"
+      printf "INSERT INTO legacy_summaries (month,area,description) VALUES (%s,%s,%s);\n", \
+             lit(substr(d, 1, 7)), lit(area), lit(rest)
+      ns++
+      next
+    }
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+      diagline[++nd] = "UNPARSED " $0
+      next
+    }
+    { next }
+    END {
+      for (i = 1; i <= nl; i++) {
+        if (lt[i] in seen) {
+          printf "INSERT INTO links VALUES (%d,%d,%s);\n", lf[i], lt[i], lit(lk[i])
+          nins++
+        } else {
+          diagline[++nd] = "DANGLING entry " lf[i] " " lk[i] "=" lt[i]
+          nskip++
         }
-        /^LOG ONLY\./ { next }
-        /^Append-only log\./ { next }
-        /^Format: `YYYY-MM-DD/ { next }
-        /^Types: decision, plan, doc, scope, code, note\./ { next }
-        !started && /^[[:space:]]*$/ { next }
-        { started = 1; print }
-      ' "$changes" > "$tmp3"
-      mv "$tmp3" "$changes"
-      echo "Rewrote the CHANGES.md header to the current format hint."
+      }
+      for (i = 1; i <= nd; i++) print diagline[i] > "/dev/stderr"
+      printf "COUNTS %d %d %d %d %d\n", n + 0, maxs + 0, nins + 0, nskip + 0, ns + 0 > "/dev/stderr"
+    }
+  ' "$changes" >> "$sql" 2> "$diag"
+  echo "COMMIT;" >> "$sql"
+
+  awk_entries="$(awk '$1 == "COUNTS" { print $2 }' "$diag")"
+  awk_max="$(awk '$1 == "COUNTS" { print $3 }' "$diag")"
+  link_count="$(awk '$1 == "COUNTS" { print $4 }' "$diag")"
+  skip_count="$(awk '$1 == "COUNTS" { print $5 }' "$diag")"
+  sum_count="$(awk '$1 == "COUNTS" { print $6 }' "$diag")"
+
+  # Warn about anything the import could not place, before it becomes invisible.
+  while IFS= read -r warn; do
+    case "$warn" in
+      DANGLING*) echo "Warning: link skipped, target serial is not in the file (collapsed by an old compaction): ${warn#DANGLING }" ;;
+      BADLINK*)  echo "Warning: link skipped, it does not point backwards: ${warn#BADLINK }" ;;
+      UNPARSED*) echo "Warning: dated line not recognized as an entry and not imported: ${warn#UNPARSED }" ;;
+    esac
+  done < "$diag"
+
+  if ! sqlite3 -bail "$db" < "$sql"; then
+    rm -f "$db"
+    echo "Error: importing CHANGES.md into changes.db failed. CHANGES.md is untouched; no database was written." >&2
+    exit 1
+  fi
+
+  # --- Verify the import against the file it came from ---------------------
+  file_entries="$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]+ \[[a-z]+\] \(' "$changes" || true)"
+  file_max="$(awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {v = $2 + 0; if (v > m) m = v} END {print m + 0}' "$changes")"
+  db_entries="$(sqlite3 -readonly "$db" 'SELECT count(*) FROM entries;')"
+  db_max="$(sqlite3 -readonly "$db" 'SELECT coalesce(max(serial), 0) FROM entries;')"
+
+  if [ "$db_entries" != "$file_entries" ] || [ "$db_max" != "$file_max" ] || [ "$awk_entries" != "$file_entries" ] || [ "$awk_max" != "$file_max" ]; then
+    rm -f "$db"
+    echo "Error: migration verification failed." >&2
+    echo "  CHANGES.md: $file_entries entries, max serial $file_max" >&2
+    echo "  changes.db: $db_entries entries, max serial $db_max" >&2
+    echo "CHANGES.md is untouched and no database was written. Report this with a copy of CHANGES.md." >&2
+    exit 1
+  fi
+
+  rm -f "$sql" "$diag" "$areas_raw"
+
+  # --- Retire the text log -------------------------------------------------
+  mv "$changes" "$changes.migrated"
+  if command -v git >/dev/null 2>&1 && git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    gitignore="$TARGET_DIR/.gitignore"
+    if ! { [ -f "$gitignore" ] && grep -qxF 'CHANGES.md.migrated' "$gitignore"; }; then
+      if [ -s "$gitignore" ] && [ "$(tail -c 1 "$gitignore" | wc -l)" -eq 0 ]; then
+        printf '\n' >> "$gitignore"
+      fi
+      printf '%s\n' 'CHANGES.md.migrated' >> "$gitignore"
+      echo "Added CHANGES.md.migrated to .gitignore."
     fi
   fi
-else
-  echo ""
-  echo "No existing CHANGES.md found. Skipped conversion."
+
+  echo "Migrated $file_entries entries (max serial $file_max), $link_count links, $sum_count legacy monthly summaries, $area_count areas."
+  if [ "$skip_count" -gt 0 ]; then
+    echo "Skipped $skip_count link(s) that pointed at serials the file no longer contains (see warnings above)."
+  fi
+  echo "CHANGES.md is now CHANGES.md.migrated. Delete it once you are satisfied with changes.db, and commit changes.db like any other project file."
 fi
 
 echo ""
