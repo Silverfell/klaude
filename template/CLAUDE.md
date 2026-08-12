@@ -26,7 +26,7 @@ Property 4 is why 3 is safe, and 3 is why 4 rarely gets tested: a session that r
 
 The full history is kept forever. There is no entry ceiling and nothing compacts, collapses, or prunes the log — depth costs nothing, because every read is a bounded query. Starting a session from ten thousand entries is exactly as cheap as starting from ten.
 
-Every read uses `-readonly`. Writes go only through the `INSERT` forms in Documentation Updates. Single quotes inside text are doubled (`''`), and that quoting discipline is the sanctioned pattern for log writes: Non-negotiable core rule 4 governs SQL your project's code issues against project data, not these fixed-shape CLI appends to the harness's own log.
+Every read uses `-readonly`. Writes go only through the `INSERT` forms in Documentation Updates; the sole exception is the trigger-restore repair in `/close`. Single quotes inside text are doubled (`''`), and that quoting discipline is the sanctioned pattern for log writes: Non-negotiable core rule 4 governs SQL your project's code issues against project data, not these fixed-shape CLI appends to the harness's own log.
 
 If either `BRIEFING.md` or `changes.db` is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` or `/klaude` is always exempt: they create these files.
 
@@ -165,7 +165,7 @@ Fields:
 - `serial` — an ascending integer the database assigns. Never reused, never renumbered, never edited. This is what lets one entry reference another.
 - `date` — defaults to today's local date. Do not pass it by hand.
 - `type` — one of the six below.
-- `area` — one of the areas listed in `BRIEFING.md`, or `-` when none fits. The `areas` table is a closed vocabulary and a trigger enforces it: an unknown area aborts the insert instead of silently creating a second spelling of an existing facet. `/close` adds an area to the table when `BRIEFING.md` gains one. An area is never removed — immutable entries already reference it, and removing it would orphan them. If work keeps landing outside the list, propose adding an area at the next `/close`.
+- `area` — one of the areas listed in `BRIEFING.md`, or `-` when none fits. The `areas` table is a closed vocabulary and a trigger enforces it: an unknown area aborts the insert instead of silently creating a second spelling of an existing facet. `/close` adds an area to the table when `BRIEFING.md` gains one. An area is never renamed or removed — immutable entries already reference it, and the database refuses both. If work keeps landing outside the list, propose adding an area at the next `/close`.
 - `description` — free text, one line, never empty.
 - `refs` — optional: a commit, PR, or issue.
 
@@ -233,7 +233,7 @@ The first three are what makes the "refuse it at authoring time" rule load-beari
 
 `BRIEFING.md`: Update if scope or decisions changed, or on a breaking change (note reason and impact). Current focus, Next steps, Open questions, and Environment quirks are refreshed by `/close`.
 
-`Areas` is the closed vocabulary that `changes.db` tags against, and it lives in two places that must agree: the `- Areas:` line in the brief, and the `areas` table. Extending it means adding it to both (`/close` does this). Never rename or remove an area that existing log entries already use — the log is immutable, so a rename orphans every entry tagged with the old name, and the database refuses the removal outright.
+`Areas` is the closed vocabulary that `changes.db` tags against, and it lives in two places that must agree: the `- Areas:` line in the brief, and the `areas` table. Extending it means adding it to both (`/close` does this). Never rename or remove an area that existing log entries already use — the log is immutable, so a rename orphans every entry tagged with the old name, and the database refuses both outright.
 
 It holds current state, never history — history is the log's job. Three rules keep the two apart:
 
@@ -245,7 +245,7 @@ It holds current state, never history — history is the log's job. Three rules 
 
 ## Output Format
 
-Every response that completes a unit of work in which files were created or modified ends with the block below. Exceptions: intermediate mid-task responses (use the `In progress; verification pending` line instead), and responses from the `/klawde` and `/close` commands, which use the exact closing output defined in their own command files.
+Every response that completes a unit of work in which files were created or modified ends with the block below. Exceptions: intermediate mid-task responses (use the `In progress; verification pending` line instead), and responses from the `/klawde`, `/klaude`, and `/close` commands, which use the exact closing output defined in their own command files.
 
 ```
 ---

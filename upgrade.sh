@@ -125,6 +125,9 @@ rewrite_codex() {
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
+      -e 's|^# /klawde: |# $klawde: |' \
+      -e 's|^# /klaude: |# $klaude: |' \
+      -e 's|^# /close: |# $close: |' \
       "$1"
 }
 
@@ -267,11 +270,20 @@ else
     needs_serials=1
   fi
 
+  changes_note="CHANGES.md was not modified."
+  backfilled=0
+  premax=0
+
   if [ "$needs_conversion" -eq 1 ] || [ "$needs_serials" -eq 1 ]; then
     echo "Normalizing legacy CHANGES.md entries before import."
 
     # Back up first (if enabled) so the original is recoverable
     maybe_backup "$changes"
+    if [ "$BACKUP" = "yes" ]; then
+      changes_note="CHANGES.md was normalized in place (content preserved; the original is in its .bak file)."
+    else
+      changes_note="CHANGES.md was normalized in place (content preserved; backups were declined)."
+    fi
 
     if [ "$needs_conversion" -eq 1 ]; then
       # Convert old-format entries (YYYY-MM-DD: description) to [note] type.
@@ -301,6 +313,7 @@ else
       # Backfill serials and the (-) area onto pre-serial entries, continuing from the
       # highest serial already present so a partially migrated file stays consistent.
       maxid="$(awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ / {v=$2+0; if (v>m) m=v} END {print m+0}' "$changes")"
+      premax="$maxid"
       tmp2="$(mktemp)"
       awk -v start="$maxid" '
         /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[note\] Summary:/ {
@@ -322,8 +335,9 @@ else
         END { printf "%d\n", n > "/dev/stderr" }
       ' "$changes" 2> "$tmp2.count" > "$tmp2"
       mv "$tmp2" "$changes"
-      echo "Backfilled serials and (-) areas onto $(cat "$tmp2.count") entries."
+      backfilled="$(cat "$tmp2.count")"
       rm -f "$tmp2.count"
+      echo "Backfilled serials and (-) areas onto $backfilled entries."
     fi
   fi
 
@@ -336,6 +350,9 @@ else
   sql="$(mktemp)"
   diag="$(mktemp)"
   areas_raw="$(mktemp)"
+  ent="$(mktemp)"
+  sums="$(mktemp)"
+  lnk="$(mktemp)"
 
   # --- Seed the closed area vocabulary -------------------------------------
   # Sources: the brief's "- Areas:" line, plus every area actually used by an
@@ -360,7 +377,7 @@ else
   # --- Emit entry, summary and link inserts --------------------------------
   # Links go last: a link naming a serial that has not been inserted yet is
   # refused by a trigger, which would abort the whole transaction.
-  awk -v Q="'" '
+  awk -v Q="'" -v ENT="$ent" -v SUMS="$sums" -v LNK="$lnk" '
     function lit(s) { gsub(Q, Q Q, s); return Q s Q }
     function addlink(f, t, k,   key) {
       if (f <= t) { diagline[++nd] = "BADLINK entry " f " " k "=" t; nskip++; return }
@@ -400,8 +417,8 @@ else
       seen[serial] = 1
       n++
       if (serial > maxs) maxs = serial
-      printf "INSERT INTO entries (serial,date,type,area,description,refs) VALUES (%d,%s,%s,%s,%s,%s);\n", \
-             serial, lit(d), lit(type), lit(area), lit(desc), (refs == "" ? "NULL" : lit(refs))
+      printf "%d\tINSERT INTO entries (serial,date,type,area,description,refs) VALUES (%d,%s,%s,%s,%s,%s);\n", \
+             serial, serial, lit(d), lit(type), lit(area), lit(desc), (refs == "" ? "NULL" : lit(refs)) > ENT
       next
     }
     /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] SUM \[[a-z]+\]/ {
@@ -415,7 +432,7 @@ else
       }
       if (rest == "") rest = "(empty summary)"
       printf "INSERT INTO legacy_summaries (month,area,description) VALUES (%s,%s,%s);\n", \
-             lit(substr(d, 1, 7)), lit(area), lit(rest)
+             lit(substr(d, 1, 7)), lit(area), lit(rest) > SUMS
       ns++
       next
     }
@@ -427,7 +444,7 @@ else
     END {
       for (i = 1; i <= nl; i++) {
         if (lt[i] in seen) {
-          printf "INSERT INTO links VALUES (%d,%d,%s);\n", lf[i], lt[i], lit(lk[i])
+          printf "INSERT INTO links VALUES (%d,%d,%s);\n", lf[i], lt[i], lit(lk[i]) > LNK
           nins++
         } else {
           diagline[++nd] = "DANGLING entry " lf[i] " " lk[i] "=" lt[i]
@@ -437,7 +454,12 @@ else
       for (i = 1; i <= nd; i++) print diagline[i] > "/dev/stderr"
       printf "COUNTS %d %d %d %d %d\n", n + 0, maxs + 0, nins + 0, nskip + 0, ns + 0 > "/dev/stderr"
     }
-  ' "$changes" >> "$sql" 2> "$diag"
+  ' "$changes" 2> "$diag"
+  # Entries must land in ascending serial order: the schema's no-backfill
+  # trigger refuses a serial below the current maximum, and the normalized
+  # file lists backfilled (highest) serials first.
+  sort -n "$ent" | cut -f2- >> "$sql"
+  cat "$sums" "$lnk" >> "$sql"
   echo "COMMIT;" >> "$sql"
 
   awk_entries="$(awk '$1 == "COUNTS" { print $2 }' "$diag")"
@@ -457,7 +479,7 @@ else
 
   if ! sqlite3 -bail "$db" < "$sql"; then
     rm -f "$db"
-    echo "Error: importing CHANGES.md into changes.db failed. CHANGES.md is untouched; no database was written." >&2
+    echo "Error: importing CHANGES.md into changes.db failed. No database was written. $changes_note" >&2
     exit 1
   fi
 
@@ -472,11 +494,21 @@ else
     echo "Error: migration verification failed." >&2
     echo "  CHANGES.md: $file_entries entries, max serial $file_max" >&2
     echo "  changes.db: $db_entries entries, max serial $db_max" >&2
-    echo "CHANGES.md is untouched and no database was written. Report this with a copy of CHANGES.md." >&2
+    echo "No database was written. $changes_note Report this with a copy of CHANGES.md." >&2
     exit 1
   fi
 
-  rm -f "$sql" "$diag" "$areas_raw"
+  rm -f "$sql" "$diag" "$areas_raw" "$ent" "$sums" "$lnk"
+
+  # --- Record the migration in the new log ---------------------------------
+  # The newest entry then explains where the log came from, which matters
+  # because the next session's tail read starts from it.
+  mig_desc="Migrated CHANGES.md into changes.db ($file_entries entries)"
+  if [ "$backfilled" -gt 0 ] && [ "$premax" -gt 0 ]; then
+    mig_desc="$mig_desc; serials $(printf '%03d' $((premax + 1)))-$(printf '%03d' $((premax + backfilled))) are backfilled pre-serial entries, older than their serial order suggests"
+  fi
+  sqlite3 -bail "$db" "INSERT INTO entries (type, area, description) VALUES ('doc','-','$mig_desc');"
+  mig_serial="$(sqlite3 -readonly "$db" 'SELECT max(serial) FROM entries;')"
 
   # --- Retire the text log -------------------------------------------------
   mv "$changes" "$changes.migrated"
@@ -492,10 +524,38 @@ else
   fi
 
   echo "Migrated $file_entries entries (max serial $file_max), $link_count links, $sum_count legacy monthly summaries, $area_count areas."
+  echo "Appended migration entry $(printf '%03d' "$mig_serial") [doc] recording the import."
+  if [ "$backfilled" -gt 0 ] && [ "$premax" -gt 0 ]; then
+    echo "Warning: $backfilled pre-serial entries were backfilled with serials above the pre-existing maximum ($premax), so the session-start tail will show those oldest entries as most recent until new entries are written. Entry $(printf '%03d' "$mig_serial") records this."
+  fi
   if [ "$skip_count" -gt 0 ]; then
     echo "Skipped $skip_count link(s) that pointed at serials the file no longer contains (see warnings above)."
   fi
   echo "CHANGES.md is now CHANGES.md.migrated. Delete it once you are satisfied with changes.db, and commit changes.db like any other project file."
+fi
+
+# ---------------------------------------------------------------------------
+# Upgrade an existing changes.db to the current schema version, in place.
+# v1 -> v2 added the areas_no_update and entries_no_backfill triggers.
+# ---------------------------------------------------------------------------
+if [ -f "$db" ]; then
+  uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;')"
+  if [ "$uv" -lt 2 ]; then
+    maybe_backup "$db"
+    for trig in areas_no_update entries_no_backfill; do
+      stmt="$(sed -n "/^CREATE TRIGGER $trig /,/END;/p" "$schema")"
+      if [ -z "$stmt" ]; then
+        echo "Error: trigger $trig not found in $schema; cannot upgrade the changes.db schema." >&2
+        exit 1
+      fi
+      printf '%s\n' "$stmt" \
+        | sed '1s/^CREATE TRIGGER /CREATE TRIGGER IF NOT EXISTS /' \
+        | sqlite3 -bail "$db"
+    done
+    sqlite3 -bail "$db" 'PRAGMA user_version = 2;'
+    echo ""
+    echo "Upgraded the changes.db schema to v2 (added the areas_no_update and entries_no_backfill triggers)."
+  fi
 fi
 
 echo ""

@@ -56,7 +56,7 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
      sqlite3 changes.db "INSERT OR IGNORE INTO areas VALUES ('ingest');"
      ```
 
-     Never rename or remove one that existing entries already use: the log is immutable, so a rename orphans every entry carrying the old name, and the database refuses the removal.
+     Never rename or remove one that existing entries already use: the log is immutable, so a rename orphans every entry carrying the old name, and the database refuses both the rename and the removal.
    - `Environment quirks`: promote durable `[note]` context into the brief (flaky sandboxes, renamed keys, local oddities) so the next session reads it without querying for it; prune quirks that no longer hold. The note itself stays in the log; the brief is where the still-true version lives.
    - `Do-not-touch`: change only on explicit user instruction.
 
@@ -65,11 +65,11 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 4. **Check the log's integrity.** The database is the project's memory and it is committed to git; a corrupt file or a missing trigger is worth catching at the close that caused it rather than three sessions later.
 
 ```sh
-sqlite3 changes.db "PRAGMA integrity_check;"
-sqlite3 changes.db "SELECT count(*) FROM sqlite_master WHERE type='trigger';"
+sqlite3 -readonly changes.db "PRAGMA integrity_check;"
+sqlite3 -readonly changes.db "SELECT count(*) FROM sqlite_master WHERE type='trigger';"
 ```
 
-   The first must print `ok`; the second must print `7`. If triggers are missing, the append-only and immutability guarantees are not being enforced — restore them by running the shipped schema's `CREATE TRIGGER` statements from `.claude/changes-schema.sql` against the database, and report it on the closing block. If `integrity_check` reports anything other than `ok`, do not attempt a repair: report it and stop, so the user can recover the file from git.
+   The first must print `ok`; the second must print `9`. If triggers are missing, the append-only and immutability guarantees are not being enforced — restore the missing trigger(s) by running their individual `CREATE TRIGGER` statements from `.claude/changes-schema.sql` against the database, and report it on the closing block. If `integrity_check` reports anything other than `ok`, do not attempt a repair: report it and stop, so the user can recover the file from git.
 
 5. Write only the file(s) you changed. If neither changed, do not write. Do not stage or commit. Leave changes dirty so the user controls when they enter git history.
 

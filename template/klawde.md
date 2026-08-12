@@ -48,7 +48,7 @@ This command starts the framework in full mode, with the Code craft module activ
 
 ```sh
 sqlite3 changes.db < .claude/changes-schema.sql
-sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('note','-','Initialized.');"
+sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('doc','-','Initialized.');"
 ```
 
    That becomes serial 1. The database belongs in git like any other project file; do not add it to `.gitignore`.

@@ -77,6 +77,9 @@ rewrite_codex() {
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
+      -e 's|^# /klawde: |# $klawde: |' \
+      -e 's|^# /klaude: |# $klaude: |' \
+      -e 's|^# /close: |# $close: |' \
       "$1"
 }
 

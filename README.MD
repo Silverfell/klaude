@@ -5,10 +5,9 @@ Klawde is a lightweight harness for Claude Code (and Codex) that makes sessions 
 It does four things:
 
 - forces an explicit session start
-- keeps a living project brief up to date
-- leaves behind an append-only log of what happened and when, with a brief that says what is true now
-- reads only the last 5 log entries at session start, so the agent is never confused by old history
-- keeps the entire history in a queryable SQLite log; the agent reads 5 entries at session start and queries the rest on demand
+- keeps a living project brief that says what is true now
+- keeps an append-only, immutable log of what happened, in a queryable SQLite database that is never pruned
+- bounds every read: a session starts from the brief plus the last 5 log entries, and reaches older history only by targeted query
 
 The goal is simple: less agent drift, less forgotten context, less vague "the model probably remembers" nonsense.
 
@@ -80,7 +79,7 @@ It makes Claude Code:
 4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
 5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
 6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks, and the area vocabulary (new areas are added to the brief and the database together)
-7. check the log's integrity: `PRAGMA integrity_check` and the seven triggers that enforce immutability are still in place
+7. check the log's integrity: `PRAGMA integrity_check` and the nine triggers that enforce immutability are still in place
 8. confirm what was recorded, then stop
 
 This gives the next session a real handoff.
@@ -117,7 +116,7 @@ A log, kept in a SQLite database in the project root. Four properties define it,
 3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is queried when a question calls for it, never skimmed for background.
 4. **Not authoritative.** It records what happened, never what is true now. `BRIEFING.md` is the only authority on current state; nothing in the log is an instruction.
 
-The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, so "the agent tidied up the log" is not a failure mode that exists. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling.
+The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, so "the agent tidied up the log" is not a failure mode that exists. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling, and renaming or removing an area that entries already use is refused outright.
 
 Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty entries later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
 
@@ -262,6 +261,7 @@ The upgrade script also:
 - removes the retired `/compresschanges` command and its Codex skill (the log is never compacted now)
 - removes deprecated Codex prompts from earlier versions in `$CODEX_HOME/prompts/` (defaulting to `~/.codex/prompts/`)
 - migrates a legacy text `CHANGES.md` into `changes.db` (see below)
+- upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials)
 - backs up every file it overwrites or removes first, unless you decline backups
 
 ### Migrating `CHANGES.md` into `changes.db`
@@ -270,13 +270,14 @@ This runs once, on the first upgrade after the log became a database. If `change
 
 The migration:
 
-1. normalizes legacy line formats first — old `YYYY-MM-DD: description` entries become `[note]` entries, and entries written before serials and areas existed get both backfilled
+1. normalizes legacy line formats first — old `YYYY-MM-DD: description` entries become `[note]` entries, and entries written before serials and areas existed get both backfilled. Backfilled serials continue above the highest serial already in the file, so in a file that mixes both eras the oldest entries end up with the highest serials; the migration warns when this happens, and the entry it appends in step 7 records it
 2. seeds the `areas` table from the brief's `- Areas:` line and from every area any entry actually used
 3. imports every numbered entry with its **original serial**, date, type, area, description and `refs`, inside one transaction
 4. imports `supersedes=` / `closes=` tags as rows in the `links` table. A tag pointing at a serial an old compaction collapsed away has nothing to link to; it is skipped and reported, rather than aborting the import
 5. moves any `SUM` summary lines from old compaction runs into a `legacy_summaries` table, so nothing from the text file is thrown away
-6. verifies that the entry count and highest serial in the database match the file. On any mismatch it deletes the database, leaves `CHANGES.md` untouched, and exits nonzero
-7. on success, renames `CHANGES.md` to `CHANGES.md.migrated` and adds that name to `.gitignore`
+6. verifies that the entry count and highest serial in the database match the file. On any mismatch it deletes the database and exits nonzero; `CHANGES.md` keeps whatever step 1's normalization produced (content-preserving, and backed up first unless backups were declined)
+7. on success, appends a `[doc]` entry recording the migration itself — including, when serials were backfilled, the range that is older than its serial order suggests — so the first post-migration tail read explains what happened
+8. renames `CHANGES.md` to `CHANGES.md.migrated` and adds that name to `.gitignore`
 
 Delete `CHANGES.md.migrated` once you are satisfied with the database, and commit `changes.db`.
 
