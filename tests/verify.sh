@@ -11,6 +11,9 @@ KLAWDE="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="$(mktemp -d)"
 cleanup() { chmod -R u+w "$BASE" 2>/dev/null; rm -rf "$BASE"; }
 trap cleanup EXIT
+# upgrade.sh retires deprecated Codex prompts from $CODEX_HOME; point it at the
+# sandbox so no test can ever touch the real ~/.codex.
+export CODEX_HOME="$BASE/codex-home"
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "PASS: $1"; }
@@ -148,6 +151,7 @@ check "S5 schema installed" cmp -s "$KLAWDE/template/changes-schema.sql" "$d/.cl
 check "S5 source version printed" grepq 'source version: ' "$BASE/s5.out"
 check "S5 restart note printed" grepq 'restart it' "$BASE/s5.out"
 d="$BASE/s5c"; mkdir -p "$d/.agents/skills"; echo "OLD AGENTS" > "$d/AGENTS.md"
+echo "OLD schema" > "$d/.agents/changes-schema.sql"   # klawde artifact: no foreign-AGENTS.md prompt
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s5c.out"
 check "S5 codex upgrade exit 0" test "$rc" -eq 0
@@ -276,6 +280,91 @@ check "S9 close.md upgraded" cmp -s "$KLAWDE/template/close.md" "$d/.claude/comm
 d="$BASE/s9b"; mkdir -p "$d"
 out="$(cd "$d" && /bin/bash "$KLAWDE/setup.sh" --claude 2>&1)"; rc=$?
 check "S9 setup under /bin/bash exit 0" test "$rc" -eq 0
+
+echo "=== S10: deprecated Codex prompts are retired from CODEX_HOME, never \$HOME ==="
+d="$BASE/s10"; mkdir -p "$d/.agents/skills/klawde"
+echo "OLD SKILL" > "$d/.agents/skills/klawde/SKILL.md"; echo "OLD AGENTS" > "$d/AGENTS.md"
+mkdir -p "$CODEX_HOME/prompts"; echo "old prompt" > "$CODEX_HOME/prompts/klawde.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s10.out"
+check "S10 exit 0" test "$rc" -eq 0
+check "S10 klawde skill counts as artifact: no foreign prompt" ngrepq 'Overwrite AGENTS.md' "$BASE/s10.out"
+check "S10 retirement message printed" grepq 'Removed deprecated prompt' "$BASE/s10.out"
+check "S10 sandboxed prompt removed" bash -c "! test -f '$CODEX_HOME/prompts/klawde.md'"
+
+echo "=== S11: foreign .agents/skills does not pass for a klawde install ==="
+d="$BASE/s11"; mkdir -p "$d/.agents/skills/deploy"
+echo "other tool skill" > "$d/.agents/skills/deploy/SKILL.md"
+echo "foreign agents file" > "$d/AGENTS.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup < /dev/null 2>&1)"; rc=$?
+echo "$out" > "$BASE/s11.out"
+check "S11 non-interactive overwrite refused" test "$rc" -ne 0
+check "S11 cannot-confirm error shown" grepq 'cannot confirm overwriting' "$BASE/s11.out"
+check "S11 AGENTS.md untouched" grepq 'foreign agents file' "$d/AGENTS.md"
+out="$(cd "$d" && printf 'y\n' | "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
+check "S11 interactive y proceeds" bash -c "test $rc -eq 0 && grep -q '# AGENTS.md' '$d/AGENTS.md'"
+check "S11 foreign skill untouched" grepq 'other tool skill' "$d/.agents/skills/deploy/SKILL.md"
+
+echo "=== S12: CHANGES.md itself is preflighted (read-only, symlink) ==="
+d="$(mkfx s12)"; echo '2025-01-10: legacy' > "$d/CHANGES.md"; chmod 444 "$d/CHANGES.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s12.out"
+check "S12 read-only CHANGES.md fails preflight" bash -c "test $rc -ne 0 && grep -q 'cannot write.*CHANGES.md' '$BASE/s12.out'"
+check "S12 CLAUDE.md untouched" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
+chmod 644 "$d/CHANGES.md"
+d="$(mkfx s12b)"; echo '2025-01-10: legacy' > "$d/real-log.md"; ln -s real-log.md "$d/CHANGES.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S12b symlinked CHANGES.md refused, CLAUDE.md untouched" \
+  bash -c "test $rc -ne 0 && echo \"$out\" | grep -q 'CHANGES.md is a symlink' && grep -q 'OLD CONTRACT' '$d/CLAUDE.md'"
+
+echo "=== S13: read-only legacy init.md in a writable dir is removed cleanly ==="
+d="$(mkfx s13)"; echo "OLD init" > "$d/.claude/commands/init.md"; chmod 444 "$d/.claude/commands/init.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup < /dev/null 2>&1)"; rc=$?
+echo "$out" > "$BASE/s13.out"
+check "S13 exit 0" test "$rc" -eq 0
+check "S13 removal message truthful, file gone" \
+  bash -c "grep -q 'Removed legacy' '$BASE/s13.out' && ! test -f '$d/.claude/commands/init.md'"
+
+echo "=== S14: CRLF CHANGES.md is stripped before import ==="
+d="$BASE/s14"; mkdir -p "$d"
+printf '2025-03-05 001 [code] (core) crlf line refs=abc\r\n2025-01-01: old style\r\n' > "$d/CHANGES.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s14.out"
+check "S14 exit 0" test "$rc" -eq 0
+check "S14 strip message shown" grepq 'Stripped CRLF' "$BASE/s14.out"
+check "S14 no CR reached the database" bash -c \
+  "test \"\$(sqlite3 -readonly '$d/changes.db' \"SELECT count(*) FROM entries WHERE description LIKE '%'||char(13)||'%' OR coalesce(refs,'') LIKE '%'||char(13)||'%';\")\" = 0"
+check "S14 both entries imported (+ doc entry)" \
+  test "$(sqlite3 -readonly "$d/changes.db" 'SELECT count(*) FROM entries;')" = "3"
+
+echo "=== S15: migration in a git repo appends to a no-trailing-newline .gitignore ==="
+d="$BASE/s15"; mkdir -p "$d"; git -C "$d" init -q
+printf 'node_modules' > "$d/.gitignore"
+printf '2025-03-05 001 [code] (-) entry\n' > "$d/CHANGES.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S15 .gitignore gains the entry on its own line" \
+  bash -c "test $rc -eq 0 && grep -qx 'CHANGES.md.migrated' '$d/.gitignore' && grep -qx 'node_modules' '$d/.gitignore'"
+
+echo "=== S16: setup.sh and upgrade.sh produce identical Codex layouts ==="
+d1="$BASE/s16a"; d2="$BASE/s16b"; mkdir -p "$d1" "$d2"
+(cd "$d1" && "$KLAWDE/setup.sh" --codex >/dev/null 2>&1)
+(cd "$d2" && "$KLAWDE/upgrade.sh" --codex --no-backup < /dev/null >/dev/null 2>&1)
+same=1
+for f in AGENTS.md .agents/changes-schema.sql .agents/skills/klawde/SKILL.md \
+         .agents/skills/klaude/SKILL.md .agents/skills/close/SKILL.md; do
+  cmp -s "$d1/$f" "$d2/$f" || same=0
+done
+check "S16 no drift between the duplicated codex writers" test "$same" -eq 1
+
+echo "=== S17: a changes.db from a newer klawde is refused ==="
+d="$(mkfx s17)"
+sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" 'PRAGMA user_version = 3;'
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s17.out"
+check "S17 exit nonzero" test "$rc" -ne 0
+check "S17 newer-schema error shown" grepq 'newer than this checkout supports' "$BASE/s17.out"
+check "S17 CLAUDE.md untouched" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
 
 echo ""
 echo "RESULT: $pass passed, $fail failed"

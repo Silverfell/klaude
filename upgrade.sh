@@ -150,11 +150,15 @@ if [ -f "$TARGET_DIR/CLAUDE.md" ]; then has_claude=1; fi
 for f in klawde.md klaude.md close.md init.md; do
   if [ -f "$TARGET_DIR/.claude/commands/$f" ]; then has_claude=1; fi
 done
+if [ -f "$TARGET_DIR/.claude/changes-schema.sql" ]; then has_claude=1; fi
 if [ -f "$TARGET_DIR/AGENTS.md" ]; then has_codex=1; fi
-if [ -d "$TARGET_DIR/.agents/skills" ] || [ -f "$TARGET_DIR/.agents/changes-schema.sql" ]; then
-  has_codex=1
-  codex_artifacts=1
-fi
+# Only klawde's own files count as Codex evidence: .agents/skills is a shared
+# convention, and another tool's skills must not pass for a klawde install.
+for f in klawde klaude close compresschanges; do
+  if [ -f "$TARGET_DIR/.agents/skills/$f/SKILL.md" ]; then codex_artifacts=1; fi
+done
+if [ -f "$TARGET_DIR/.agents/changes-schema.sql" ]; then codex_artifacts=1; fi
+if [ "$codex_artifacts" -eq 1 ]; then has_codex=1; fi
 DETECTED=""
 if [ "$has_claude" -eq 1 ] && [ "$has_codex" -eq 1 ]; then
   DETECTED="both"
@@ -266,12 +270,16 @@ fi
 if [ -f "$db" ]; then
   if ! uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;' 2>/dev/null)"; then
     bad_dest "changes.db exists but is not a readable SQLite database."
+  elif [ "$uv" -gt 2 ]; then
+    bad_dest "changes.db schema is v$uv, newer than this checkout supports (v2); run 'git pull' in $SCRIPT_DIR and retry."
   elif [ "$uv" -lt 2 ]; then
     # The schema upgrade below writes it in place.
     check_dest "$db"
   fi
 elif [ -f "$changes" ]; then
-  # The migration creates the database and renames CHANGES.md (same directory).
+  # The migration rewrites CHANGES.md in place (normalization), creates the
+  # database, and renames CHANGES.md (same directory).
+  check_dest "$changes"
   check_dest "$db"
   if [ -f "$TARGET_DIR/.gitignore" ]; then check_dest "$TARGET_DIR/.gitignore"; fi
 fi
@@ -341,14 +349,14 @@ upgrade_claude() {
   local legacy_init="$TARGET_DIR/.claude/commands/init.md"
   if [ -f "$legacy_init" ]; then
     maybe_backup "$legacy_init"
-    rm "$legacy_init"
+    rm -f "$legacy_init"
     echo "Removed legacy .claude/commands/init.md."
   fi
   # Retire /compresschanges (the log is never compacted now).
   local legacy_compress="$TARGET_DIR/.claude/commands/compresschanges.md"
   if [ -f "$legacy_compress" ]; then
     maybe_backup "$legacy_compress"
-    rm "$legacy_compress"
+    rm -f "$legacy_compress"
     echo "Removed retired .claude/commands/compresschanges.md."
   fi
 }
@@ -385,7 +393,7 @@ upgrade_codex() {
   local legacy_skill="$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
   if [ -f "$legacy_skill" ]; then
     maybe_backup "$legacy_skill"
-    rm "$legacy_skill"
+    rm -f "$legacy_skill"
     rmdir "$(dirname "$legacy_skill")" 2>/dev/null || true
     echo "Removed retired .agents/skills/compresschanges/SKILL.md."
   fi
@@ -395,7 +403,7 @@ upgrade_codex() {
     local legacy_prompt="$prompts_dir/$old.md"
     if [ -f "$legacy_prompt" ]; then
       maybe_backup "$legacy_prompt"
-      rm "$legacy_prompt"
+      rm -f "$legacy_prompt"
       echo "Removed deprecated prompt $legacy_prompt."
     fi
   done
@@ -408,7 +416,11 @@ on_fail() {
   echo "Error: the upgrade did NOT complete; this install may be partially updated." >&2
   echo "Fix the problem above and re-run upgrade.sh." >&2
 }
-trap 'if [ $? -ne 0 ]; then on_fail; fi' EXIT
+# All migration scratch files live in one directory so every exit path —
+# success, explicit abort, or a set -e death — removes them in one sweep.
+MIGTMP=""
+cleanup_migtmp() { if [ -n "$MIGTMP" ]; then rm -rf "$MIGTMP"; fi; }
+trap 'rc=$?; cleanup_migtmp; if [ "$rc" -ne 0 ]; then on_fail; fi' EXIT
 
 case "$TARGET" in
   claude) upgrade_claude ;;
@@ -433,8 +445,16 @@ elif [ ! -f "$schema" ]; then
   echo "Error: $schema not found in source; cannot migrate CHANGES.md." >&2
   exit 1
 else
+  MIGTMP="$(mktemp -d)"
+
   # --- Normalization: bring legacy text formats up to the last text format ---
   # so the import pass below only has to understand one line shape.
+  # Windows line endings count: a CR that survives into an entry is permanent,
+  # because the log it lands in is immutable.
+  needs_crlf=0
+  if grep -q "$(printf '\r')" "$changes"; then
+    needs_crlf=1
+  fi
   needs_conversion=0
   if grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}:' "$changes"; then
     needs_conversion=1
@@ -449,7 +469,7 @@ else
   backfilled=0
   premax=0
 
-  if [ "$needs_conversion" -eq 1 ] || [ "$needs_serials" -eq 1 ]; then
+  if [ "$needs_crlf" -eq 1 ] || [ "$needs_conversion" -eq 1 ] || [ "$needs_serials" -eq 1 ]; then
     echo "Normalizing legacy CHANGES.md entries before import."
 
     # Back up first (if enabled) so the original is recoverable
@@ -460,10 +480,17 @@ else
       changes_note="CHANGES.md was normalized in place (content preserved; backups were declined)."
     fi
 
+    if [ "$needs_crlf" -eq 1 ]; then
+      # Strip CRs before the passes below, so none can leak into a description.
+      tr -d '\r' < "$changes" > "$MIGTMP/crlf"
+      mv -f "$MIGTMP/crlf" "$changes"
+      echo "Stripped CRLF line endings from CHANGES.md."
+    fi
+
     if [ "$needs_conversion" -eq 1 ]; then
       # Convert old-format entries (YYYY-MM-DD: description) to [note] type.
       # Leaves already-typed entries untouched; the serial pass below handles them.
-      tmp="$(mktemp)"
+      tmp="$MIGTMP/conv"
       converted=0
       while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}):[[:space:]]*(.*)$ ]]; then
@@ -473,7 +500,7 @@ else
           printf '%s\n' "$line" >> "$tmp"
         fi
       done < "$changes"
-      mv "$tmp" "$changes"
+      mv -f "$tmp" "$changes"
       echo "Converted $converted old-format entries to [note] type."
     fi
 
@@ -489,7 +516,7 @@ else
       # highest serial already present so a partially migrated file stays consistent.
       maxid="$(awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ / {v=$2+0; if (v>m) m=v} END {print m+0}' "$changes")"
       premax="$maxid"
-      tmp2="$(mktemp)"
+      tmp2="$MIGTMP/serial"
       awk -v start="$maxid" '
         /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[note\] Summary:/ {
           rest = substr($0, 12)
@@ -509,9 +536,8 @@ else
         { print }
         END { printf "%d\n", n > "/dev/stderr" }
       ' "$changes" 2> "$tmp2.count" > "$tmp2"
-      mv "$tmp2" "$changes"
+      mv -f "$tmp2" "$changes"
       backfilled="$(cat "$tmp2.count")"
-      rm -f "$tmp2.count"
       echo "Backfilled serials and (-) areas onto $backfilled entries."
     fi
   fi
@@ -522,12 +548,14 @@ else
   rm -f "$db"
   sqlite3 -bail "$db" < "$schema"
 
-  sql="$(mktemp)"
-  diag="$(mktemp)"
-  areas_raw="$(mktemp)"
-  ent="$(mktemp)"
-  sums="$(mktemp)"
-  lnk="$(mktemp)"
+  sql="$MIGTMP/sql"
+  diag="$MIGTMP/diag"
+  areas_raw="$MIGTMP/areas_raw"
+  ent="$MIGTMP/ent"
+  sums="$MIGTMP/sums"
+  lnk="$MIGTMP/lnk"
+  # The awk below only opens the files it writes to; the readers need all three.
+  : > "$ent"; : > "$sums"; : > "$lnk"
 
   # --- Seed the closed area vocabulary -------------------------------------
   # Sources: the brief's "- Areas:" line, plus every area actually used by an
@@ -673,8 +701,6 @@ else
     exit 1
   fi
 
-  rm -f "$sql" "$diag" "$areas_raw" "$ent" "$sums" "$lnk"
-
   # --- Record the migration in the new log ---------------------------------
   # The newest entry then explains where the log came from, which matters
   # because the next session's tail read starts from it.
@@ -686,7 +712,7 @@ else
   mig_serial="$(sqlite3 -readonly "$db" 'SELECT max(serial) FROM entries;')"
 
   # --- Retire the text log -------------------------------------------------
-  mv "$changes" "$changes.migrated"
+  mv -f "$changes" "$changes.migrated"
   if command -v git >/dev/null 2>&1 && git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     gitignore="$TARGET_DIR/.gitignore"
     if ! { [ -f "$gitignore" ] && grep -qxF 'CHANGES.md.migrated' "$gitignore"; }; then
@@ -734,6 +760,7 @@ if [ -f "$db" ]; then
 fi
 
 trap - EXIT
+cleanup_migtmp
 src_version="$(git -C "$SCRIPT_DIR" log -1 --format='%h %ad' --date=short 2>/dev/null || echo unknown)"
 echo ""
 echo "Done. Upgrade complete at $TARGET_DIR (target: $TARGET, source version: $src_version)"

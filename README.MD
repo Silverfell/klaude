@@ -45,7 +45,8 @@ It is especially useful on projects where architecture, scope, and decision hist
 | `template/close.md` | `/close` command: updates session records before ending work |
 | `template/changes-schema.sql` | The `changes.db` log schema: tables, the triggers that enforce append-only immutability, and the `log_lines` rendering view |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
-| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, and retires the legacy `/init` and `/compresschanges` commands |
+| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, upgrades an existing `changes.db` schema in place, and retires the legacy `/init` and `/compresschanges` commands |
+| `tests/verify.sh` | Regression suite for both scripts: builds throwaway projects in a temp directory and runs the real scripts against them |
 
 ## How it works
 
@@ -252,7 +253,7 @@ To overwrite an existing installation with the latest defaults:
 /path/to/klaude/upgrade.sh --no-backup  # skip the backup prompt, create no .bak files
 ```
 
-With no target flag, the script detects the existing install and offers it as the default; press Enter to accept. Detection looks at the root contracts (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and at the harness files themselves (`.claude/commands/` for Claude, `.agents/` for Codex), so an install whose root contract was renamed or removed is still recognized. If the chosen target leaves a detected install un-upgraded, the script says so before writing anything; and if `AGENTS.md` exists with no `.agents/` klawde files behind it, the file may belong to another tool, so the script asks for confirmation before overwriting it — decline under `both` and only the Claude layout is upgraded; decline under `codex` and nothing is changed.
+With no target flag, the script detects the existing install and offers it as the default; press Enter to accept. Detection looks at the root contracts (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and at klawde's own harness files (its command files and log schema under `.claude/` for Claude, its skills and log schema under `.agents/` for Codex — another tool's `.agents/skills` does not count), so an install whose root contract was renamed or removed is still recognized. If the chosen target leaves a detected install un-upgraded, the script says so before writing anything; and if `AGENTS.md` exists with no `.agents/` klawde files behind it, the file may belong to another tool, so the script asks for confirmation before overwriting it — decline under `both` and only the Claude layout is upgraded; decline under `codex` and nothing is changed.
 
 It then asks whether to create `.bak` backups before overwriting. Answer `n` and no backup files are created. Use `--backup` or `--no-backup` to skip that prompt.
 
@@ -265,7 +266,7 @@ The upgrade script also:
 - migrates a legacy text `CHANGES.md` into `changes.db` (see below)
 - upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials)
 - backs up every file it overwrites or removes first, unless you decline backups
-- runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a readable database (and writable when a schema upgrade will touch it), and a pending `CHANGES.md` migration must be able to create the database and update `.gitignore`. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
+- runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a readable database (writable when a schema upgrade will touch it, and refused outright when its schema version is newer than the checkout supports), and a pending `CHANGES.md` migration must be able to rewrite `CHANGES.md` in place (a read-only or symlinked `CHANGES.md` is refused), create the database, and update `.gitignore`. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
 
 ### Migrating `CHANGES.md` into `changes.db`
 
@@ -273,14 +274,14 @@ This runs once, on the first upgrade after the log became a database. If `change
 
 The migration:
 
-1. normalizes legacy line formats first — old `YYYY-MM-DD: description` entries become `[note]` entries, and entries written before serials and areas existed get both backfilled. Backfilled serials continue above the highest serial already in the file, so in a file that mixes both eras the oldest entries end up with the highest serials; the migration warns when this happens, and the entry it appends in step 7 records it
+1. normalizes legacy line formats first — Windows (CRLF) line endings are stripped so no carriage return can reach the immutable log, old `YYYY-MM-DD: description` entries become `[note]` entries, and entries written before serials and areas existed get both backfilled. Backfilled serials continue above the highest serial already in the file, so in a file that mixes both eras the oldest entries end up with the highest serials; the migration warns when this happens, and the entry it appends in step 7 records it
 2. seeds the `areas` table from the brief's `- Areas:` line and from every area any entry actually used
 3. imports every numbered entry with its **original serial**, date, type, area, description and `refs`, inside one transaction
 4. imports `supersedes=` / `closes=` tags as rows in the `links` table. A tag pointing at a serial an old compaction collapsed away has nothing to link to; it is skipped and reported, rather than aborting the import
 5. moves any `SUM` summary lines from old compaction runs into a `legacy_summaries` table, so nothing from the text file is thrown away
 6. verifies that the entry count and highest serial in the database match the file. On any mismatch it deletes the database and exits nonzero; `CHANGES.md` keeps whatever step 1's normalization produced (content-preserving, and backed up first unless backups were declined)
 7. on success, appends a `[doc]` entry recording the migration itself — including, when serials were backfilled, the range that is older than its serial order suggests — so the first post-migration tail read explains what happened
-8. renames `CHANGES.md` to `CHANGES.md.migrated` and adds that name to `.gitignore`
+8. renames `CHANGES.md` to `CHANGES.md.migrated` and, when the project is a git repository, adds that name to `.gitignore`
 
 Delete `CHANGES.md.migrated` once you are satisfied with the database, and commit `changes.db`.
 
