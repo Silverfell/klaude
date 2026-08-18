@@ -48,13 +48,90 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Read one line of user input into the named variable. A closed stdin
+# (non-interactive run) must be a loud error, not a silent set -e exit
+# at the prompt with a partial or missing install.
+prompt_read() {
+  if ! IFS= read -r "$1"; then
+    echo "" >&2
+    echo "Error: stdin closed at a prompt (non-interactive run?)." >&2
+    echo "Pass a target flag to skip the prompt: --claude/--codex/--both." >&2
+    exit 1
+  fi
+}
+
+# Every shipped source must be present before anything is written; a stale or
+# partial checkout would otherwise abort mid-copy and leave a partial install.
+check_templates() {
+  local f missing=0
+  for f in CLAUDE.md klawde.md klaude.md close.md changes-schema.sql; do
+    if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
+      echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
+      missing=1
+    fi
+  done
+  if [ "$missing" -eq 1 ]; then
+    echo "The source checkout looks stale or incomplete; run 'git pull' in $SCRIPT_DIR and retry." >&2
+    exit 1
+  fi
+}
+check_templates
+
+# The two contracts must be distinct regular files: writing one through a
+# symlink would clobber the other layout's contract with rewritten content.
+check_no_symlink() {
+  if [ -L "$1" ]; then
+    echo "Error: $1 is a symlink (to '$(readlink "$1")'). Nothing was changed." >&2
+    echo "Klawde's Claude and Codex contracts have different content and cannot share one file." >&2
+    echo "Remove the symlink and re-run; the install writes a real file in its place." >&2
+    exit 1
+  fi
+}
+
+# Confirm one destination can be written (or created) without writing anything.
+# A destination that exists as something other than a regular file, or whose
+# nearest existing ancestor is not a directory, cannot be written either.
+dest_writable() {
+  local path="$1" dir
+  dir="$(dirname "$path")"
+  if [ -e "$path" ]; then
+    [ -f "$path" ] && [ -w "$path" ]
+    return
+  fi
+  while [ ! -e "$dir" ]; do dir="$(dirname "$dir")"; done
+  [ -d "$dir" ] && [ -w "$dir" ]
+}
+
+# Preflight problems are collected, all reported, then fatal in one exit, so
+# every offender surfaces before the first write instead of the run aborting
+# mid-way with a partial install.
+PREFLIGHT_BAD=0
+bad_dest() {
+  echo "Error: $1" >&2
+  PREFLIGHT_BAD=1
+}
+# A destination file about to be overwritten or created.
+check_dest() {
+  if [ -L "$1" ]; then
+    bad_dest "$1 is a symlink (to '$(readlink "$1")'); klawde writes real files, remove the symlink first."
+  elif ! dest_writable "$1"; then
+    bad_dest "cannot write $1 (not writable, or blocked by a non-directory parent)."
+  fi
+}
+gate_preflight() {
+  if [ "$PREFLIGHT_BAD" -eq 1 ]; then
+    echo "Nothing was changed. Fix the problems above and re-run." >&2
+    exit 1
+  fi
+}
+
 # Prompt for the target if no flag was given.
 if [ -z "$TARGET" ]; then
   echo "Install for:"
   echo "[1] claude"
   echo "[2] codex"
   echo "[3] both"
-  read -r sel
+  prompt_read sel
   case "$sel" in
     1|claude) TARGET="claude" ;;
     2|codex)  TARGET="codex" ;;
@@ -102,7 +179,7 @@ should_write() {
   local dst="$1"
   if [ -f "$dst" ]; then
     echo "$dst already exists. Overwrite? [y/N]"
-    read -r confirm
+    prompt_read confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
       echo "Skipped $dst."
       return 1
@@ -168,14 +245,44 @@ install_codex() {
   fi
 }
 
+# Refuse symlinked, unwritable and blocked destinations before any write.
+if [ "$TARGET" != "codex" ]; then
+  check_no_symlink "$TARGET_DIR/CLAUDE.md"
+  for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
+              "$TARGET_DIR/.claude/commands/klaude.md" "$TARGET_DIR/.claude/commands/close.md" \
+              "$TARGET_DIR/.claude/changes-schema.sql"; do
+    check_dest "$path"
+  done
+fi
+if [ "$TARGET" != "claude" ]; then
+  check_no_symlink "$TARGET_DIR/AGENTS.md"
+  for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
+              "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$TARGET_DIR/.agents/skills/close/SKILL.md" \
+              "$TARGET_DIR/.agents/changes-schema.sql"; do
+    check_dest "$path"
+  done
+fi
+gate_preflight
+
+# From the first write onward, any abort must say the install may be partial
+# instead of dying quietly with some files written and some missing.
+on_fail() {
+  echo "" >&2
+  echo "Error: the install did NOT complete; it may be partial." >&2
+  echo "Fix the problem above and re-run setup.sh." >&2
+}
+trap 'if [ $? -ne 0 ]; then on_fail; fi' EXIT
+
 case "$TARGET" in
   claude) install_claude ;;
   codex)  install_codex ;;
   both)   install_claude; install_codex ;;
 esac
 
+trap - EXIT
+src_version="$(git -C "$SCRIPT_DIR" log -1 --format='%h %ad' --date=short 2>/dev/null || echo unknown)"
 echo ""
-echo "Done. Project initialized at $TARGET_DIR (target: $TARGET)"
+echo "Done. Project initialized at $TARGET_DIR (target: $TARGET, source version: $src_version)"
 case "$TARGET" in
   claude)
     echo "Wrote CLAUDE.md, .claude/commands/ and .claude/changes-schema.sql in this project."
@@ -187,4 +294,7 @@ case "$TARGET" in
     echo "Wrote CLAUDE.md + .claude/ (Claude Code) and AGENTS.md + .agents/ (Codex), including the log schema for each."
     echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session; klaude is the variant without the code-craft rules." ;;
 esac
+if [ "$TARGET" != "codex" ]; then
+  echo "If a Claude Code session is already open in this project, restart it: slash commands load at session start."
+fi
 echo "The entry protocol creates BRIEFING.md and the changes.db log on its first run; commit changes.db like any other project file."

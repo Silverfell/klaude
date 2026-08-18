@@ -53,12 +53,108 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Detect an existing install to offer as the default selection. Both contract
-# files present means a combined install.
+# Read one line of user input into the named variable. A closed stdin
+# (non-interactive run) must be a loud error, not a silent set -e exit
+# at the prompt with nothing upgraded.
+prompt_read() {
+  if ! IFS= read -r "$1"; then
+    echo "" >&2
+    echo "Error: stdin closed at a prompt (non-interactive run?). Nothing was changed." >&2
+    echo "Pass flags to skip the prompts: --claude/--codex/--both and --backup/--no-backup." >&2
+    exit 1
+  fi
+}
+
+# Every shipped source must be present before anything is written; a stale or
+# partial checkout would otherwise abort mid-copy and leave a partial upgrade.
+check_templates() {
+  local f missing=0
+  for f in CLAUDE.md klawde.md klaude.md close.md changes-schema.sql; do
+    if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
+      echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
+      missing=1
+    fi
+  done
+  if [ "$missing" -eq 1 ]; then
+    echo "The source checkout looks stale or incomplete; run 'git pull' in $SCRIPT_DIR and retry." >&2
+    exit 1
+  fi
+}
+check_templates
+
+# The two contracts must be distinct regular files: writing one through a
+# symlink would clobber the other layout's contract with rewritten content.
+check_no_symlink() {
+  if [ -L "$1" ]; then
+    echo "Error: $1 is a symlink (to '$(readlink "$1")'). Nothing was changed." >&2
+    echo "Klawde's Claude and Codex contracts have different content and cannot share one file." >&2
+    echo "Remove the symlink and re-run; the upgrade writes a real file in its place." >&2
+    exit 1
+  fi
+}
+
+# Confirm one destination can be written (or created) without writing anything.
+# A destination that exists as something other than a regular file, or whose
+# nearest existing ancestor is not a directory, cannot be written either.
+dest_writable() {
+  local path="$1" dir
+  dir="$(dirname "$path")"
+  if [ -e "$path" ]; then
+    [ -f "$path" ] || return 1
+    [ -w "$path" ] || return 1
+    # Backups land next to the file, so the directory must be writable too.
+    if [ "$BACKUP" = "yes" ] && [ ! -w "$dir" ]; then return 1; fi
+    return 0
+  fi
+  while [ ! -e "$dir" ]; do dir="$(dirname "$dir")"; done
+  [ -d "$dir" ] && [ -w "$dir" ]
+}
+
+# Preflight problems are collected, all reported, then fatal in one exit, so
+# every offender surfaces before the first write instead of the run aborting
+# mid-way with a partial upgrade.
+PREFLIGHT_BAD=0
+bad_dest() {
+  echo "Error: $1" >&2
+  PREFLIGHT_BAD=1
+}
+# A destination file about to be overwritten or created.
+check_dest() {
+  if [ -L "$1" ]; then
+    bad_dest "$1 is a symlink (to '$(readlink "$1")'); klawde writes real files, remove the symlink first."
+  elif ! dest_writable "$1"; then
+    bad_dest "cannot write $1 (not writable, or blocked by a non-directory parent)."
+  fi
+}
+# An existing file about to be removed or renamed: rm/mv need a writable directory.
+check_removal() {
+  if [ -f "$1" ] && [ ! -w "$(dirname "$1")" ]; then
+    bad_dest "cannot remove $1 (its directory is not writable)."
+  fi
+}
+gate_preflight() {
+  if [ "$PREFLIGHT_BAD" -eq 1 ]; then
+    echo "Nothing was changed. Fix the problems above and re-run." >&2
+    exit 1
+  fi
+}
+
+# Detect an existing install to offer as the default selection. Both layouts
+# present means a combined install. Harness files count as evidence alongside
+# the root contracts: a project whose root contract was renamed or removed
+# still has an install worth upgrading, and must not be silently skipped.
 has_claude=0
 has_codex=0
+codex_artifacts=0
 if [ -f "$TARGET_DIR/CLAUDE.md" ]; then has_claude=1; fi
+for f in klawde.md klaude.md close.md init.md; do
+  if [ -f "$TARGET_DIR/.claude/commands/$f" ]; then has_claude=1; fi
+done
 if [ -f "$TARGET_DIR/AGENTS.md" ]; then has_codex=1; fi
+if [ -d "$TARGET_DIR/.agents/skills" ] || [ -f "$TARGET_DIR/.agents/changes-schema.sql" ]; then
+  has_codex=1
+  codex_artifacts=1
+fi
 DETECTED=""
 if [ "$has_claude" -eq 1 ] && [ "$has_codex" -eq 1 ]; then
   DETECTED="both"
@@ -77,7 +173,7 @@ if [ -z "$TARGET" ]; then
   if [ -n "$DETECTED" ]; then
     echo "[Enter for detected: $DETECTED]"
   fi
-  read -r sel
+  prompt_read sel
   case "$sel" in
     1|claude) TARGET="claude" ;;
     2|codex)  TARGET="codex" ;;
@@ -95,12 +191,91 @@ fi
 # Ask whether to create backups, unless a flag already decided.
 if [ -z "$BACKUP" ]; then
   echo "Create .bak backups before overwriting? [Y/n]"
-  read -r ans
+  prompt_read ans
   case "$ans" in
     n|N|no|No) BACKUP="no" ;;
     *) BACKUP="yes" ;;
   esac
 fi
+
+# An install the chosen target leaves out stays stale; say so rather than
+# letting a successful-looking run hide it.
+if [ "$has_claude" -eq 1 ] && [ "$TARGET" = "codex" ]; then
+  echo "Note: an existing Claude install was detected but is NOT being upgraded (target: codex). Re-run with --claude or --both to upgrade it."
+fi
+if [ "$has_codex" -eq 1 ] && [ "$TARGET" = "claude" ]; then
+  echo "Note: an existing Codex install was detected but is NOT being upgraded (target: claude). Re-run with --codex or --both to upgrade it."
+fi
+
+# Refuse symlinked contracts first: it is the precise diagnosis, and there is
+# no point asking about a file the preflight would refuse to write anyway.
+if [ "$TARGET" != "codex" ]; then check_no_symlink "$TARGET_DIR/CLAUDE.md"; fi
+if [ "$TARGET" != "claude" ]; then check_no_symlink "$TARGET_DIR/AGENTS.md"; fi
+
+# An AGENTS.md with no .agents/ klawde artifacts behind it may belong to
+# another tool entirely; overwriting it needs explicit confirmation, and no
+# flag can grant that, so a non-interactive run must abort here.
+if [ "$TARGET" != "claude" ] && [ -f "$TARGET_DIR/AGENTS.md" ] && [ "$codex_artifacts" -eq 0 ]; then
+  echo "Warning: AGENTS.md exists but no .agents/ klawde files were found; it may belong to another tool."
+  echo "Overwrite AGENTS.md and continue the Codex upgrade? [y/N]"
+  if ! IFS= read -r overwrite_agents; then
+    echo "" >&2
+    echo "Error: stdin closed; cannot confirm overwriting a possibly foreign AGENTS.md. Nothing was changed." >&2
+    echo "Run interactively, or re-run with --claude to leave the Codex layout alone." >&2
+    exit 1
+  fi
+  if [[ ! "$overwrite_agents" =~ ^[Yy]$ ]]; then
+    if [ "$TARGET" = "both" ]; then
+      TARGET="claude"
+      echo "AGENTS.md left untouched; upgrading the Claude layout only."
+    else
+      echo "AGENTS.md left untouched. Nothing was changed." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# The paths the migration and schema-upgrade steps below work with; the
+# preflight needs them before the first write.
+changes="$TARGET_DIR/CHANGES.md"
+db="$TARGET_DIR/changes.db"
+schema="$SCRIPT_DIR/template/changes-schema.sql"
+
+# Refuse symlinked, unwritable and unremovable destinations before any write.
+if [ "$TARGET" != "codex" ]; then
+  for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
+              "$TARGET_DIR/.claude/commands/klaude.md" "$TARGET_DIR/.claude/commands/close.md" \
+              "$TARGET_DIR/.claude/changes-schema.sql"; do
+    check_dest "$path"
+  done
+  check_removal "$TARGET_DIR/.claude/commands/init.md"
+  check_removal "$TARGET_DIR/.claude/commands/compresschanges.md"
+fi
+if [ "$TARGET" != "claude" ]; then
+  for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
+              "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$TARGET_DIR/.agents/skills/close/SKILL.md" \
+              "$TARGET_DIR/.agents/changes-schema.sql"; do
+    check_dest "$path"
+  done
+  check_removal "$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
+  for old in klawde close compresschanges; do
+    check_removal "${CODEX_HOME:-$HOME/.codex}/prompts/$old.md"
+  done
+fi
+# Migration and schema-upgrade targets (target-agnostic; see below).
+if [ -f "$db" ]; then
+  if ! uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;' 2>/dev/null)"; then
+    bad_dest "changes.db exists but is not a readable SQLite database."
+  elif [ "$uv" -lt 2 ]; then
+    # The schema upgrade below writes it in place.
+    check_dest "$db"
+  fi
+elif [ -f "$changes" ]; then
+  # The migration creates the database and renames CHANGES.md (same directory).
+  check_dest "$db"
+  if [ -f "$TARGET_DIR/.gitignore" ]; then check_dest "$TARGET_DIR/.gitignore"; fi
+fi
+gate_preflight
 
 echo ""
 echo "Upgrading klawde defaults in $TARGET_DIR (target: $TARGET, backups: $BACKUP)"
@@ -142,12 +317,6 @@ build_skill_file() {
     rewrite_codex "$src"
   } > "$dst"
 }
-
-# A missing source contract is fatal.
-if [ ! -f "$SCRIPT_DIR/template/CLAUDE.md" ]; then
-  echo "Error: $SCRIPT_DIR/template/CLAUDE.md not found in source."
-  exit 1
-fi
 
 upgrade_claude() {
   local dst="$TARGET_DIR/CLAUDE.md"
@@ -232,6 +401,15 @@ upgrade_codex() {
   done
 }
 
+# From the first write onward, any abort must say the install may be partial
+# instead of dying quietly with some files upgraded and some stale.
+on_fail() {
+  echo "" >&2
+  echo "Error: the upgrade did NOT complete; this install may be partially updated." >&2
+  echo "Fix the problem above and re-run upgrade.sh." >&2
+}
+trap 'if [ $? -ne 0 ]; then on_fail; fi' EXIT
+
 case "$TARGET" in
   claude) upgrade_claude ;;
   codex)  upgrade_codex ;;
@@ -241,11 +419,8 @@ esac
 # ---------------------------------------------------------------------------
 # Migrate a legacy text CHANGES.md into the changes.db log (runs once).
 # Target-agnostic: the log lives in the project root under either layout.
+# The $changes / $db / $schema paths are set above, before the preflight.
 # ---------------------------------------------------------------------------
-changes="$TARGET_DIR/CHANGES.md"
-db="$TARGET_DIR/changes.db"
-schema="$SCRIPT_DIR/template/changes-schema.sql"
-
 echo ""
 if [ -f "$db" ]; then
   echo "changes.db is already present. Log migration already done; skipped."
@@ -558,5 +733,10 @@ if [ -f "$db" ]; then
   fi
 fi
 
+trap - EXIT
+src_version="$(git -C "$SCRIPT_DIR" log -1 --format='%h %ad' --date=short 2>/dev/null || echo unknown)"
 echo ""
-echo "Done. Upgrade complete at $TARGET_DIR (target: $TARGET)"
+echo "Done. Upgrade complete at $TARGET_DIR (target: $TARGET, source version: $src_version)"
+if [ "$TARGET" != "codex" ]; then
+  echo "If a Claude Code session is open in this project, restart it: slash commands load at session start."
+fi

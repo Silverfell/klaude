@@ -231,6 +231,8 @@ The `both` option installs both layouts at once: `CLAUDE.md` and `.claude/` for 
 
 Setup requires the `sqlite3` CLI on your PATH and stops with an install hint if it is missing. It does not create the log itself: `BRIEFING.md` and `changes.db` are created by the entry protocol on its first run.
 
+Both `setup.sh` and `upgrade.sh` refuse to continue when a prompt is reached and stdin is not interactive — pass the flags instead of piping input. Before writing anything they verify that every template file is present in the source checkout and that every destination can actually be written (writable, not a symlink, not blocked by a stray file where a directory belongs); a `CLAUDE.md` or `AGENTS.md` that is a symlink is always refused, since the two contracts have different content and cannot share one file. On success they print the source version (git commit) they installed from; if a Claude Code session is already open in the project, restart it, since slash commands load at session start.
+
 Then start your tool and run the entry protocol:
 
 ```txt
@@ -250,7 +252,7 @@ To overwrite an existing installation with the latest defaults:
 /path/to/klaude/upgrade.sh --no-backup  # skip the backup prompt, create no .bak files
 ```
 
-With no target flag, the script detects the existing install (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and offers it as the default; press Enter to accept.
+With no target flag, the script detects the existing install and offers it as the default; press Enter to accept. Detection looks at the root contracts (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and at the harness files themselves (`.claude/commands/` for Claude, `.agents/` for Codex), so an install whose root contract was renamed or removed is still recognized. If the chosen target leaves a detected install un-upgraded, the script says so before writing anything; and if `AGENTS.md` exists with no `.agents/` klawde files behind it, the file may belong to another tool, so the script asks for confirmation before overwriting it — decline under `both` and only the Claude layout is upgraded; decline under `codex` and nothing is changed.
 
 It then asks whether to create `.bak` backups before overwriting. Answer `n` and no backup files are created. Use `--backup` or `--no-backup` to skip that prompt.
 
@@ -263,6 +265,7 @@ The upgrade script also:
 - migrates a legacy text `CHANGES.md` into `changes.db` (see below)
 - upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials)
 - backs up every file it overwrites or removes first, unless you decline backups
+- runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a readable database (and writable when a schema upgrade will touch it), and a pending `CHANGES.md` migration must be able to create the database and update `.gitignore`. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
 
 ### Migrating `CHANGES.md` into `changes.db`
 
