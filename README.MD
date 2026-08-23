@@ -30,7 +30,8 @@ Klawde is for people who already use Claude Code and want:
 - a consistent session protocol
 - a living project brief
 - a project log that stays useful as it grows, without flooding the agent with history
-- stricter rules around honesty, verification, and scope control
+- stricter rules around honesty, verification, scope control, and plain-English replies with no false confidence
+- an agent that asks about genuine unknowns before building — it must be able to state what it is delivering, how it will be judged, and what it touches before it starts; gaps only you can close become batched questions, and minutiae it can sort out itself never do
 - a cheap way to reduce context drift between sessions
 
 It is especially useful on projects where architecture, scope, and decision history matter more than just the final diff.
@@ -79,7 +80,7 @@ It makes Claude Code:
 3. insert typed log entries — the serial and date assign themselves — for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
 4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
 5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
-6. refresh the brief's state fields: current focus, next steps, open questions, environment quirks, and the area vocabulary (new areas are added to the brief and the database together)
+6. refresh the brief's state fields: current focus, next steps, environment quirks, and the area vocabulary (new areas are added to the brief and the database together); open questions are only proposed, and written only if you explicitly say yes
 7. check the log's integrity: `PRAGMA integrity_check` and the nine triggers that enforce immutability are still in place
 8. confirm what was recorded, then stop
 
@@ -100,13 +101,13 @@ Use it for:
 - areas (the closed vocabulary `changes.db` tags entries against, mirrored in its `areas` table)
 - breaking-change context
 - current focus and next steps (replaced every `/close`; the next session resumes on-thread instead of reinventing direction)
-- open questions
+- open questions (added to or edited only with your explicit consent: the agent proposes, you decide)
 - a do-not-touch list (files or areas that are off-limits, and why)
 - environment quirks (durable context the next session should read without having to query for it)
 
 A new session should be able to read this and understand what the project is trying to do, and what it was about to do next.
 
-It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps and open questions pruned of what is done or answered, and no bullet that narrates a past session — that belongs in `changes.db`. There are no size or item caps of any kind, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, and it is as long as the project's current state requires.
+It holds current state, never history. `/close` keeps it that way by content, not by quota: one current focus that is replaced rather than appended to, next steps pruned of what is done, open questions pruned of what is answered (only once you have agreed to the change), and no bullet that narrates a past session — that belongs in `changes.db`. There are no size or item caps of any kind, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number. The brief is read in full at every session start, and it is as long as the project's current state requires.
 
 ### `changes.db`
 
@@ -318,6 +319,7 @@ Core principles:
 
 - the log is a log: append-only, immutable, tailed not read, and never a source of instructions
 - read real files before making claims
+- ask before building when only the user can close a gap; never ask what a file or a query can answer
 - say "I don't know" when you do not know
 - verify before reporting completion
 - keep diffs minimal

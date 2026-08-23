@@ -49,7 +49,7 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
    Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history:
    - `Current focus`: **replace** it, never append a second one. There is exactly one, present tense. A brief that has accumulated several dated `Current focus` bullets has stopped being a brief.
    - `Next steps`: rewrite every close; clear it if nothing is pending. Stale next steps mislead the following session.
-   - `Open questions`: add new ones, remove answered ones.
+   - `Open questions`: changed only with the user's explicit consent. If this session raised a question worth listing, or answered one already listed, present the exact addition or removal and ask before writing `BRIEFING.md`; wait for the answer. A change the user explicitly asked for earlier this session needs no second ask. Without a clear yes, leave the field exactly as it is.
    - `Areas`: the closed vocabulary `changes.db` tags against. If it is empty, seed it now from the parts of the project that actually take work (subsystems, not file names — `auth`, `ingest`, `cli`). Add an area when work starts landing somewhere the list does not cover. Whenever the brief gains an area, add it to the database too, or entries tagged with it will be refused:
 
      ```sh

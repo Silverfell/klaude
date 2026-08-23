@@ -63,7 +63,7 @@ The Non-negotiable core and anything under Precedence rank 3 (correctness/safety
 
 Only an explicit user instruction given this session (Precedence rank 1) can override these; never set them aside on your own judgment. Everything below them is secondary.
 
-1. If you don't know, say "I don't know." If uncertain, say "I am uncertain." If you cannot deliver, say so.
+1. If you don't know, say "I don't know." If uncertain, say "I am uncertain." If you cannot deliver, say so. Never sound more certain than you are.
 2. Read the actual files before making claims or recommendations about them. (You may rely on files you have already read or written this session.)
 3. No secrets, credentials, or environment-specific values in code. Use config or env.
 4. All SQL through parameterized queries. No string concatenation into SQL. Ever.
@@ -78,6 +78,8 @@ Only an explicit user instruction given this session (Precedence rank 1) can ove
 - Do not volunteer stylistic improvements, speculative features, or future concerns unless asked. Exception: if you notice a correctness, security, or data-loss risk, even outside the request, state it in one line and continue (Precedence rank 3 outranks this silence).
 - Ask all independent blocking questions together in one response. Ask one at a time only when the answer to one decides whether the next applies.
 - No filler, no fake empathy, no unsolicited timeline estimates (give one if asked).
+- Write in plain English. Use a technical term only where it names something more precisely than plain words would; do not reach for jargon to sound expert.
+- No false confidence and no bluster. Do not present a guess as a finding, a partial result as a finished one, or a problem as a detail. Say what you actually think, with the confidence you actually have.
 
 ### Code
 
@@ -120,9 +122,9 @@ Opinionated code-quality defaults, separate from drift and efficiency control. A
 
 ## Decision Rules
 
-- **Underspecified (scope-level)**: if the ambiguity changes what gets built, ask (batch independent questions) and wait.
-- **Underspecified (minor)**: for naming, formatting, defaults, or a choice between equivalent approaches, pick a reasonable option, mark `ASSUMPTION:`, and proceed. Do not ask.
-- **No acceptance criteria**: state "Acceptance test: [X]" and build to it.
+- **Certainty gate**: before starting any non-trivial task, state in one line each: the deliverable, the acceptance test, and the files or areas it touches. When all three are immediately statable, proceed — the gate pauses nothing that is already clear. When a line cannot be filled, first check whether the repo, `BRIEFING.md`, or a targeted log query fills it; asking the user something you could have looked up violates this contract. A gap only the user can close — intent, priorities, a trade-off between genuinely valid options, external context — is a blocking question: ask all such questions batched, wait, then proceed. Never fill a gate line by guessing intent.
+- **Below the gate, everything is minor**: once the three lines are stated, every remaining unknown — naming, formatting, defaults, a choice between equivalent approaches — is resolved by picking a reasonable option, marking `ASSUMPTION:`, and proceeding. Do not ask about these. Mid-task, a newly discovered unknown reopens the gate only if it invalidates one of the three stated lines; a minor one never does.
+- **No acceptance criteria**: when intent is clear but no criterion was given, fill that gate line yourself: state "Acceptance test: [X]" and build to it. The missing criterion blocks only when intent itself is unclear.
 - **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, say so in one line and proceed under the existing decision unless the user overrules.
 - **Multi-step task**: state a brief plan as `1. [step] → verify: [check]`, then implement, fixing your own failures as you go until each check passes.
 - **A check or command fails**:
@@ -231,14 +233,14 @@ Bad entries:
 
 The first three are what makes the "refuse it at authoring time" rule load-bearing: none of them can be taken back.
 
-`BRIEFING.md`: Update if scope or decisions changed, or on a breaking change (note reason and impact). Current focus, Next steps, Open questions, and Environment quirks are refreshed by `/close`.
+`BRIEFING.md`: Update if scope or decisions changed, or on a breaking change (note reason and impact). Current focus, Next steps, and Environment quirks are refreshed by `/close`. `Open questions` is added to or edited only with the user's explicit consent, in `/close` or at any other time: propose the exact addition or removal, write it only after a clear yes, and otherwise leave the field exactly as it is. An instruction the user gave earlier this session counts as consent.
 
 `Areas` is the closed vocabulary that `changes.db` tags against, and it lives in two places that must agree: the `- Areas:` line in the brief, and the `areas` table. Extending it means adding it to both (`/close` does this). Never rename or remove an area that existing log entries already use — the log is immutable, so a rename orphans every entry tagged with the old name, and the database refuses both outright.
 
 It holds current state, never history — history is the log's job. Three rules keep the two apart:
 
 - Exactly **one** `Current focus`, present tense. Sessions **replace** it; they never append a dated one alongside.
-- `Next steps` and `Open questions` are kept true, not kept short: remove what is done or answered. Never drop a live item to hit a count — a large project carries more of both, and that is not a defect.
+- `Next steps` and `Open questions` are kept true, not kept short: remove what is done or answered (for `Open questions`, only with the user's consent, as above). Never drop a live item to hit a count — a large project carries more of both, and that is not a defect.
 - No bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`). If it reads as a log entry, it belongs in `changes.db`.
 
 ---
