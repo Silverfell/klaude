@@ -62,7 +62,7 @@ It makes Claude Code:
 3. read `BRIEFING.md` completely
 4. ask for the project's purpose and current scope if the brief is empty
 5. read the last 5 entries of `changes.db` — that is the whole read; older history is queried, not skimmed
-6. check that recent changes do not contradict the brief, and flag stale focus or next steps
+6. check that recent changes do not contradict the brief and that every brief field is still one line — either finding stops the session until the brief is reconciled or `/close` has run; stale focus or next steps are only flagged
 7. confirm readiness (brief, recent changes, current focus, dirty state), then stop
 
 This forces the session to begin from actual project state instead of hand-waving.
@@ -82,7 +82,7 @@ It makes Claude Code:
 5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
 6. refresh the brief's state fields: current focus, next steps, environment quirks, and the area vocabulary (new areas are added to the brief and the database together); open questions are only proposed, and written only if you explicitly say yes
 7. check the log's integrity: `PRAGMA integrity_check` and the nine triggers that enforce immutability are still in place
-8. confirm what was recorded, then stop
+8. measure the brief's shape and refuse to finish while any field runs past one line, then confirm what was recorded — with every field's line count — and stop
 
 This gives the next session a real handoff.
 
@@ -107,7 +107,7 @@ Use it for:
 
 A new session should be able to read this and understand what the project is trying to do, and what it was about to do next.
 
-It holds current state, never history, and it is read in full at every session start — so it is bounded by shape rather than by count. Every field is one bullet on one line: a sentence or a short list of clauses, as in the example brief. There are no item caps, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number; but every field has an outflow. `/close` enforces it: one current focus that is replaced rather than appended to, next steps pruned of what is done, open questions pruned of what is answered (only once you have agreed to the change), key decisions pruned of what has been superseded, breaking-change context and environment quirks pruned of what no longer holds, and no bullet that narrates a past session — that belongs in `changes.db`. The brief is not a scratchpad: findings, progress, and verification results stay in the agent's replies and the log. A field that has grown past one line is restored at the next `/close`, and the session-start protocol flags it if it sees one.
+It holds current state, never history, and it is read in full at every session start — so it is bounded by shape rather than by count. Every field is one bullet on one line: a sentence or a short list of clauses, as in the example brief. There are no item caps, because a large project legitimately carries more open questions than a small one and no session should delete live state to satisfy a number; but every field has an outflow. `/close` enforces it: one current focus that is replaced rather than appended to, next steps pruned of what is done, open questions pruned of what is answered (only once you have agreed to the change), key decisions pruned of what has been superseded, breaking-change context and environment quirks pruned of what no longer holds, and no bullet that narrates a past session — that belongs in `changes.db`. The brief is not a scratchpad: findings, progress, and verification results stay in the agent's replies and the log. A field that has grown past one line is restored at the next `/close`, which measures every field's line count, prints the counts in its closing block, and will not finish while one is over a line; the session-start protocol stops on such a field the same way it stops on a scope contradiction.
 
 ### `changes.db`
 

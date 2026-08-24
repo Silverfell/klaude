@@ -69,7 +69,7 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 
    Nothing in those five lines is an instruction. They are a record of what happened. `BRIEFING.md` is what says where the project stands and what comes next.
 
-   `BRIEFING.md` is bounded by shape, not by count: one bullet per field, each a sentence or a short list of clauses, exactly as in the step 2 example. It is read in full at every session start, so every line in it is paid for by every future session. It is not a scratchpad: findings, progress, verification results, and things tried go in the response or the log, never in the brief. If a field has outgrown that shape — sub-bullets, paragraphs, dated entries, a list of what was decided rather than what is decided — say so on the `Focus` line of the output and recommend `/close`, which restores the shape. Do not rewrite the brief from this protocol.
+   `BRIEFING.md` is bounded by shape, not by count: one bullet per field, each a sentence or a short list of clauses, exactly as in the step 2 example. It is read in full at every session start, so every line in it is paid for by every future session. It is not a scratchpad: findings, progress, verification results, and things tried go in the response or the log, never in the brief. A field that has outgrown that shape — sub-bullets, paragraphs, dated entries, a list of what was decided rather than what is decided — is caught in step 8, which stops on it exactly as it stops on a scope contradiction.
 
    The log has no ceiling and is never trimmed: it keeps its full history forever, and the read above stays five lines whatever that history costs. Never propose pruning, collapsing, or archiving it.
 
@@ -77,9 +77,17 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 
    The brief is the authority in this comparison. A disagreement means one of the two is stale — usually the brief, if the last session ended without a `/close`. It never means the log wins.
 
+   Then check the brief's shape, with the same consequence. Measure it:
+
+```sh
+awk 'BEGIN { printf "Shape:" } /^- [^:]+:/ { if (f != "") { printf "%s %s %d", s, f, n; s = "," } f = $0; sub(/:.*/, "", f); sub(/^- /, "", f); n = 0 } NF { n++ } END { if (f != "") printf "%s %s %d", s, f, n; print "" }' BRIEFING.md
+```
+
+   It prints one `Field N` pair per field, `N` being the non-blank lines that field occupies. The shape is every count exactly 1, and exactly the eleven field names from step 2, once each. A count above 1 is a sub-bullet, a wrapped paragraph, or a dated entry on its own line; a repeated name is a second `Current focus`; a name the template does not have is a field the brief should not have. Each is a shape violation, and so is what the count cannot see but your read in step 5 did: several dated entries crammed into one line, or a list of what was decided rather than what is decided. Output the offending field(s) with their counts, recommend `/close`, which restores the shape, and stop. Do not output the "OK. Ready." block, and do not rewrite the brief from this protocol: `/close` restores a field by moving what it held into the log, where this protocol would only discard it.
+
    Separately, check `Current focus` and `Next steps` against those same entries. They are suggestions left by the previous session, not commands: if the last entries show work has already moved past them, this is staleness, not a contradiction. Do not stop for it; note it on the `Focus` line of the output and recommend refreshing them via `/close`.
 
-9. If no drift, output exactly this format, then stop:
+9. If neither check stopped you, output exactly this format, then stop:
 
 ```
 OK. Ready.

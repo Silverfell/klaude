@@ -366,6 +366,58 @@ check "S17 exit nonzero" test "$rc" -ne 0
 check "S17 newer-schema error shown" grepq 'newer than this checkout supports' "$BASE/s17.out"
 check "S17 CLAUDE.md untouched" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
 
+echo "=== S18: the brief shape measurement shipped in the commands ==="
+# /klawde step 8 and /close step 6 carry the same awk one-liner; it must be one
+# command, and it must count what the protocols say it counts.
+d="$BASE/s18"; mkdir -p "$d"
+grep '^awk ' "$KLAWDE/template/klawde.md" > "$d/klawde.cmd"
+grep '^awk ' "$KLAWDE/template/close.md"  > "$d/close.cmd"
+check "S18 klawde.md carries exactly one measurement" test "$(wc -l < "$d/klawde.cmd")" -eq 1
+check "S18 close.md carries exactly one measurement"  test "$(wc -l < "$d/close.cmd")" -eq 1
+check "S18 both commands identical" cmp -s "$d/klawde.cmd" "$d/close.cmd"
+cat > "$d/BRIEFING.md" <<'EOF'
+# Briefing
+
+- Purpose: CLI tool that syncs Shopify orders into the local ERP.
+- Current scope: order import, retry queue, dry-run mode. No refunds yet.
+- Key decisions: Postgres SKIP LOCKED over Redis (2026-05-12); single binary, no daemon.
+- Non-goals: multi-tenant support, real-time sync.
+- Areas: import, retry, cli, config.
+- Breaking-change context: v0.4 renamed config key `shop_url` to `store_url`.
+- Current focus: retry queue hardening.
+- Next steps:
+- Open questions: should dry-run write an audit file?
+- Do-not-touch: `legacy/importer.pl` (production cron depends on its exact output).
+- Environment quirks: Shopify sandbox throttles hard after ~50 req/min.
+EOF
+out="$(cd "$d" && /bin/bash "$d/close.cmd")"
+check "S18 well-shaped brief measures all 1s" test "$out" = "Shape: Purpose 1, Current scope 1, Key decisions 1, Non-goals 1, Areas 1, Breaking-change context 1, Current focus 1, Next steps 1, Open questions 1, Do-not-touch 1, Environment quirks 1"
+cat > "$d/BRIEFING.md" <<'EOF'
+# Briefing
+
+- Purpose: CLI tool that syncs Shopify orders into the local ERP.
+- Current scope: order import, retry queue, dry-run mode. No refunds yet.
+- Key decisions:
+  - Postgres SKIP LOCKED over Redis (2026-05-12)
+  - single binary, no daemon
+- Non-goals: multi-tenant support, real-time sync.
+- Areas: import, retry, cli, config.
+- Breaking-change context: v0.4 renamed config key `shop_url` to `store_url`.
+- Current focus: retry queue hardening.
+- Current focus (2026-06-01): backoff cap.
+- Next steps: add backoff cap; test double-delivery on restart.
+  Also verify the retry table index.
+
+- Open questions: should dry-run write an audit file?
+- Do-not-touch: `legacy/importer.pl` (production cron depends on its exact output).
+- Environment quirks: Shopify sandbox throttles hard after ~50 req/min.
+EOF
+out="$(cd "$d" && /bin/bash "$d/close.cmd")"
+check "S18 sub-bullets counted" bash -c "case '$out' in *'Key decisions 3,'*) exit 0;; *) exit 1;; esac"
+check "S18 continuation line counted" bash -c "case '$out' in *'Next steps 2,'*) exit 0;; *) exit 1;; esac"
+check "S18 duplicate Current focus surfaces as a second name" bash -c "case '$out' in *'Current focus 1, Current focus (2026-06-01) 1,'*) exit 0;; *) exit 1;; esac"
+check "S18 blank line between fields not counted" bash -c "case '$out' in *'Open questions 1,'*) exit 0;; *) exit 1;; esac"
+
 echo ""
 echo "RESULT: $pass passed, $fail failed"
 exit "$fail"

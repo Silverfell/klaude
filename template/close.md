@@ -46,7 +46,7 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 
    If any of the above changed, update `BRIEFING.md` accordingly. An empty field in `BRIEFING.md` (e.g., Purpose) counts as changed: draft it from what this session revealed. Keep it concise but sufficient to brief a new contributor; match the example brief in `.claude/commands/klawde.md`.
 
-   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history, and it is bounded by shape: one bullet per field, one line each, a sentence or a short list of clauses. Before writing, check every field against that shape. A field that has grown sub-bullets, paragraphs, or dated entries is restored to one line: what is still true is condensed into the line, what narrates a past session becomes a log entry in step 2 if the log does not already hold it, and working notes — findings, progress, verification results, things tried — are dropped, because they were never the brief's to keep. Report a restored field on the closing block.
+   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history, and it is bounded by shape: one bullet per field, one line each, a sentence or a short list of clauses. Before writing, check every field against that shape. A field that has grown sub-bullets, paragraphs, or dated entries is restored to one line: what is still true is condensed into the line, what narrates a past session becomes a log entry in step 2 if the log does not already hold it, and working notes — findings, progress, verification results, things tried — are dropped, because they were never the brief's to keep. Report a restored field on the closing block. Step 6 measures the result; a field it finds still over one line sends you back here.
    - `Current focus`: **replace** it, never append a second one. There is exactly one, present tense. A brief that has accumulated several dated `Current focus` bullets has stopped being a brief.
    - `Next steps`: rewrite every close; clear it if nothing is pending. Stale next steps mislead the following session.
    - `Open questions`: changed only with the user's explicit consent. If this session raised a question worth listing, or answered one already listed, present the exact addition or removal and ask before writing `BRIEFING.md`; wait for the answer. A change the user explicitly asked for earlier this session needs no second ask. Without a clear yes, leave the field exactly as it is.
@@ -75,12 +75,23 @@ sqlite3 -readonly changes.db "SELECT count(*) FROM sqlite_master WHERE type='tri
 
 5. Write only the file(s) you changed. If neither changed, do not write. Do not stage or commit. Leave changes dirty so the user controls when they enter git history.
 
-6. Output exactly this format, then stop:
+6. **Measure the brief's shape.** Run this against the file as it now stands on disk — after the write in step 5, never from memory, and even when the brief was not touched this session:
+
+```sh
+awk 'BEGIN { printf "Shape:" } /^- [^:]+:/ { if (f != "") { printf "%s %s %d", s, f, n; s = "," } f = $0; sub(/:.*/, "", f); sub(/^- /, "", f); n = 0 } NF { n++ } END { if (f != "") printf "%s %s %d", s, f, n; print "" }' BRIEFING.md
+```
+
+   It prints one `Field N` pair per field, `N` being the non-blank lines that field occupies. The shape is every count exactly 1, and exactly the eleven field names of the template, once each. A count above 1 is a sub-bullet, a wrapped paragraph, or a dated entry on its own line; a repeated name is a second `Current focus`. Either means step 3 missed a field: go back to it, restore that field to one line (what is still true condensed into the line, what narrates a past session into the log via step 2, working notes dropped), write again, and measure again. The closing block is not printed while any count is not 1. This protocol does not finish with a sub-bullet in the brief.
+
+7. Output exactly this format, then stop:
 
 ```
 Session closed.
 changes.db: [N] new entries (serials [X]-[Y] | none); integrity ok [| integrity: <problem>].
 BRIEFING.md: [updated | unchanged] [; restored to shape: <fields>].
+Shape: <the step 6 output, verbatim — Purpose 1, Current scope 1, … Environment quirks 1>
 ```
 
-Do not skip this protocol. If nothing recordable changed, say so and confirm both files are unchanged.
+   The `Shape` line is the measurement's own output pasted in, never typed from expectation. It reads all 1s by construction: a block with any other number in it was printed against step 6.
+
+Do not skip this protocol. If nothing recordable changed, say so and confirm both files are unchanged; the `Shape` line is still measured and printed.
