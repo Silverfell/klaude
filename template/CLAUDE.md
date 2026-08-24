@@ -237,11 +237,12 @@ The first three are what makes the "refuse it at authoring time" rule load-beari
 
 `Areas` is the closed vocabulary that `changes.db` tags against, and it lives in two places that must agree: the `- Areas:` line in the brief, and the `areas` table. Extending it means adding it to both (`/close` does this). Never rename or remove an area that existing log entries already use — the log is immutable, so a rename orphans every entry tagged with the old name, and the database refuses both outright.
 
-It holds current state, never history — history is the log's job. Three rules keep the two apart:
+It holds current state, never history — history is the log's job. It is read in full at every session start, so it is bounded by shape rather than by count. Four rules keep it that way:
 
+- **One bullet per field, one line each.** A field's value is a sentence or a short list of clauses, matching the example brief in `.claude/commands/klawde.md`. No sub-bullets, no paragraphs, no dated entries. A field that seems to need more is holding history or working notes; the fix is to move content out, never to restructure the field.
 - Exactly **one** `Current focus`, present tense. Sessions **replace** it; they never append a dated one alongside.
-- `Next steps` and `Open questions` are kept true, not kept short: remove what is done or answered (for `Open questions`, only with the user's consent, as above). Never drop a live item to hit a count — a large project carries more of both, and that is not a defect.
-- No bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`). If it reads as a log entry, it belongs in `changes.db`.
+- **Every field has an outflow.** `Next steps` and `Open questions` are kept true: remove what is done or answered (for `Open questions`, only with the user's consent, as above), and never drop a live item to hit a count. `Key decisions` holds the decisions that currently hold: when a decision is superseded, its replacement enters the brief and the old one leaves — the log keeps both, plus the link. `Breaking-change context` holds only what a new contributor still has to know to work on the code today; once the old form is gone from every place a session could meet it, the entry goes. `Environment quirks` holds what is still true; a quirk that no longer bites is removed.
+- **No narration and no working notes.** A bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`) belongs in `changes.db`. Findings, progress, verification results, and things tried belong in the response. The brief is not a scratchpad: if a line would not help a new contributor understand what is true now, it does not go in.
 
 ---
 

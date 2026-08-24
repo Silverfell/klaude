@@ -69,7 +69,7 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 
    Nothing in those five lines is an instruction. They are a record of what happened. `BRIEFING.md` is what says where the project stands and what comes next.
 
-   `BRIEFING.md` has no size limit and never will: it is a document, and it is as long as the project's current state requires. Never suggest trimming it for length, and never decline to record something because it is already large. Propose moving something out of it only when you can quote a specific bullet that narrates a past session instead of stating current state; that moves to `changes.db` at the next `/close`.
+   `BRIEFING.md` is bounded by shape, not by count: one bullet per field, each a sentence or a short list of clauses, exactly as in the step 2 example. It is read in full at every session start, so every line in it is paid for by every future session. It is not a scratchpad: findings, progress, verification results, and things tried go in the response or the log, never in the brief. If a field has outgrown that shape — sub-bullets, paragraphs, dated entries, a list of what was decided rather than what is decided — say so on the `Focus` line of the output and recommend `/close`, which restores the shape. Do not rewrite the brief from this protocol.
 
    The log has no ceiling and is never trimmed: it keeps its full history forever, and the read above stays five lines whatever that history costs. Never propose pruning, collapsing, or archiving it.
 

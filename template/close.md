@@ -46,7 +46,7 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 
    If any of the above changed, update `BRIEFING.md` accordingly. An empty field in `BRIEFING.md` (e.g., Purpose) counts as changed: draft it from what this session revealed. Keep it concise but sufficient to brief a new contributor; match the example brief in `.claude/commands/klawde.md`.
 
-   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history:
+   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history, and it is bounded by shape: one bullet per field, one line each, a sentence or a short list of clauses. Before writing, check every field against that shape. A field that has grown sub-bullets, paragraphs, or dated entries is restored to one line: what is still true is condensed into the line, what narrates a past session becomes a log entry in step 2 if the log does not already hold it, and working notes — findings, progress, verification results, things tried — are dropped, because they were never the brief's to keep. Report a restored field on the closing block.
    - `Current focus`: **replace** it, never append a second one. There is exactly one, present tense. A brief that has accumulated several dated `Current focus` bullets has stopped being a brief.
    - `Next steps`: rewrite every close; clear it if nothing is pending. Stale next steps mislead the following session.
    - `Open questions`: changed only with the user's explicit consent. If this session raised a question worth listing, or answered one already listed, present the exact addition or removal and ask before writing `BRIEFING.md`; wait for the answer. A change the user explicitly asked for earlier this session needs no second ask. Without a clear yes, leave the field exactly as it is.
@@ -57,7 +57,9 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
      ```
 
      Never rename or remove one that existing entries already use: the log is immutable, so a rename orphans every entry carrying the old name, and the database refuses both the rename and the removal.
-   - `Environment quirks`: promote durable `[note]` context into the brief (flaky sandboxes, renamed keys, local oddities) so the next session reads it without querying for it; prune quirks that no longer hold. The note itself stays in the log; the brief is where the still-true version lives.
+   - `Key decisions`: the decisions that currently hold, not the history of deciding. When this session superseded a decision, the replacement enters and the old one leaves — the log keeps both, plus the `supersedes` link, so nothing is lost by removing it here.
+   - `Breaking-change context`: only what a new contributor still has to know to work on the code today. Once the old form is gone from every place a session could meet it (no code, config, docs, or data still carry it), remove the entry; the log has the record.
+   - `Environment quirks`: promote durable `[note]` context into the brief (flaky sandboxes, renamed keys, local oddities) so the next session reads it without querying for it; remove quirks that no longer hold. The note itself stays in the log; the brief is where the still-true version lives.
    - `Do-not-touch`: change only on explicit user instruction.
 
    A field is trimmed by removing what is no longer true, never by dropping live state to hit a number. A large project legitimately carries more open questions than a small one. What does not belong at any size: a bullet that narrates a past session rather than stating current state (`Styling pass`, `Auth refactor`, `Cleanup pass`). That is history — move it to `changes.db` or cut it.
@@ -78,7 +80,7 @@ sqlite3 -readonly changes.db "SELECT count(*) FROM sqlite_master WHERE type='tri
 ```
 Session closed.
 changes.db: [N] new entries (serials [X]-[Y] | none); integrity ok [| integrity: <problem>].
-BRIEFING.md: [updated | unchanged].
+BRIEFING.md: [updated | unchanged] [; restored to shape: <fields>].
 ```
 
 Do not skip this protocol. If nothing recordable changed, say so and confirm both files are unchanged.
