@@ -2,12 +2,13 @@
 
 Klawde is a lightweight harness for Claude Code (and Codex) that makes sessions more reliable.
 
-It does four things:
+It does five things:
 
 - forces an explicit session start
 - keeps a living project brief that says what is true now
 - keeps an append-only, immutable log of what happened, in a queryable SQLite database that is never pruned
-- bounds every read: a session starts from the brief plus the last 5 log entries, and reaches older history only by targeted query
+- gives the agent a trigger-guarded parking lot (concerns) for its own open questions and doubts, so they stop leaking into the brief as narrative clutter
+- bounds every read: a session starts from the brief, the last 5 log entries, and the open-concern count, and reaches older history only by targeted query
 
 The goal is simple: less agent drift, less forgotten context, less vague "the model probably remembers" nonsense.
 
@@ -41,12 +42,11 @@ It is especially useful on projects where architecture, scope, and decision hist
 | File | Purpose |
 |------|---------|
 | `template/CLAUDE.md` | Project rules, verification rules, output contract, plus an optional code-craft module (delete that section if you only want drift and efficiency control) |
-| `template/klawde.md` | `/klawde` command: reads or creates session documents at session start (full mode, code-craft rules active) |
-| `template/klaude.md` | `/klaude` command: same entry protocol in lean mode, with the code-craft rules disabled for the session |
+| `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
 | `template/close.md` | `/close` command: updates session records before ending work |
-| `template/changes-schema.sql` | The `changes.db` log schema: tables, the triggers that enforce append-only immutability, and the `log_lines` rendering view |
+| `template/changes-schema.sql` | The `changes.db` schema: the log tables with the triggers that enforce append-only immutability, the agent's `concerns` table with its one-way lifecycle, and the `log_lines`/`concern_lines` rendering views |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
-| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, upgrades an existing `changes.db` schema in place, and retires the legacy `/init` and `/compresschanges` commands |
+| `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, upgrades an existing `changes.db` schema in place, and retires the legacy `/init`, `/klaude`, and `/compresschanges` commands |
 | `tests/verify.sh` | Regression suite for both scripts: builds throwaway projects in a temp directory and runs the real scripts against them |
 
 ## How it works
@@ -61,13 +61,11 @@ It makes Claude Code:
 2. note pre-existing uncommitted git changes (informational: possible unfinished work from a prior session)
 3. read `BRIEFING.md` completely
 4. ask for the project's purpose and current scope if the brief is empty
-5. read the last 5 entries of `changes.db` — that is the whole read; older history is queried, not skimmed
+5. read the last 5 entries of `changes.db`, plus the count of open concerns — that is the whole read; older history is queried, not skimmed
 6. check that recent changes do not contradict the brief and that every brief field is still one line — either finding stops the session until the brief is reconciled or `/close` has run; stale focus or next steps are only flagged
-7. confirm readiness (brief, recent changes, current focus, dirty state), then stop
+7. confirm readiness (brief, recent changes, current focus, open-concern count, dirty state), then stop
 
 This forces the session to begin from actual project state instead of hand-waving.
-
-`/klawde` starts the session in full mode: the contract's optional code-craft module (error-handling, batching, typing, and abstraction rules) is active. `/klaude` (note the spelling) runs the same protocol in lean mode: the code-craft module is disabled and the session runs on drift and efficiency control only. Both report the mode in their readiness output.
 
 ### `/close`
 
@@ -79,10 +77,11 @@ It makes Claude Code:
 2. review what changed in the session, consulting git to recover work that long sessions may have compacted out of context
 3. insert typed log entries — the serial and date assign themselves — for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation
 4. flag work that contradicts the brief's scope, non-goals, or do-not-touch list
-5. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
-6. refresh the brief's state fields: current focus, next steps, environment quirks, and the area vocabulary (new areas are added to the brief and the database together); open questions are only proposed, and written only if you explicitly say yes
-7. check the log's integrity: `PRAGMA integrity_check` and the nine triggers that enforce immutability are still in place
-8. measure the brief's shape and refuse to finish while any field runs past one line, then confirm what was recorded — with every field's line count — and stop
+5. triage every open concern — the agent-side questions, doubts, and settled-decision exceptions parked in the `concerns` table: record new ones the session raised, resolve (with a recorded reason) only what the session genuinely settled, and present everything else to you in one batch with a proposed disposition — resolve, promote to the brief's open questions, or defer; a deferred concern stays open and comes back at the next close
+6. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
+7. refresh the brief's state fields: current focus, next steps, environment quirks, and the area vocabulary (new areas are added to the brief and the database together); open questions are only proposed, and written only if you explicitly say yes
+8. check the log's integrity: `PRAGMA integrity_check` and the seventeen triggers that enforce immutability and the concern lifecycle are still in place
+9. measure the brief's shape and refuse to finish while any field runs past one line, then confirm what was recorded — with every field's line count and the open-concern count — and stop
 
 This gives the next session a real handoff.
 
@@ -118,7 +117,7 @@ A log, kept in a SQLite database in the project root. Four properties define it,
 3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is queried when a question calls for it, never skimmed for background.
 4. **Not authoritative.** It records what happened, never what is true now. `BRIEFING.md` is the only authority on current state; nothing in the log is an instruction.
 
-The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, so "the agent tidied up the log" is not a failure mode that exists. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling, and renaming or removing an area that entries already use is refused outright.
+The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, and an insert that names an existing serial is refused rather than replacing the row, so "the agent tidied up the log" is not a failure mode that exists. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling, and renaming or removing an area that entries already use is refused outright.
 
 Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty entries later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
 
@@ -186,6 +185,22 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT
 
 The last two are the ones a text file could never answer in a single pass: "which findings are still open" and "which decisions still hold" both require knowing what *later* entries did to an earlier one, which is a join, not a grep. Under the old text log they were approximated by reading the whole file — which is exactly what property 3 forbids.
 
+#### The `concerns` table
+
+Since schema v3 the database also carries a `concerns` table, and it is deliberately **not** part of the log. A concern is the agent's own working state — an open question it cannot settle alone, a doubt about deferred work, an exception it noticed to a settled decision — present tense, where the log is history. It exists so the agent has a durable, sanctioned place for exactly the things that otherwise get smuggled into `BRIEFING.md` as narrative clutter.
+
+The discipline is trigger-enforced, like everything else here: a concern is born open, its text is immutable from the moment it is written, resolving it is a one-way update that records the date and the reason exactly once, and nothing is ever deleted. It can reference the log entry it is about (`ref_serial`), and its `area` comes from the same closed vocabulary as entries.
+
+```sh
+sqlite3 changes.db "INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers; the export worker is not',41);"
+sqlite3 changes.db "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;"
+```
+
+Two rules keep it honest:
+
+- **Never authoritative.** A concern is a suggestion the agent left itself, not an instruction, and it never overrides the brief. It reaches `Open questions` only through a `/close` proposal that you approve.
+- **Every concern has an outflow.** A session starts by reading only the open count. `/close` reads every open concern and disposes of each: the agent resolves — with a recorded reason — what the session genuinely settled, and presents everything else to you with a proposed disposition: resolve, promote, or defer. Deferring keeps it open, and it comes back at the next close, so nothing rots silently and nothing is buried without you seeing it.
+
 Requirements: the `sqlite3` CLI. It is preinstalled on macOS and packaged as `sqlite3` on every mainstream Linux distribution. Nothing else — no server, no extension, no Python.
 
 ## Installation
@@ -215,15 +230,13 @@ For Claude Code, that copies into the current project:
 
 - `CLAUDE.md`
 - `.claude/commands/klawde.md`
-- `.claude/commands/klaude.md`
 - `.claude/commands/close.md`
 - `.claude/changes-schema.sql`
 
-For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde`, `$klaude`, and `$close` (or picked from `/skills`):
+For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde` and `$close` (or picked from `/skills`):
 
 - `AGENTS.md`
 - `.agents/skills/klawde/SKILL.md`
-- `.agents/skills/klaude/SKILL.md`
 - `.agents/skills/close/SKILL.md`
 - `.agents/changes-schema.sql`
 
@@ -262,10 +275,11 @@ The upgrade script also:
 
 - overwrites the harness files with the latest versions (Claude, Codex, or both layouts), including the log schema
 - removes the legacy `.claude/commands/init.md` (Claude installs only; the entry protocol is now `/klawde`)
+- removes the retired `/klaude` command and its Codex skill (the lean mode is gone; `/klawde` is the only entry protocol)
 - removes the retired `/compresschanges` command and its Codex skill (the log is never compacted now)
 - removes deprecated Codex prompts from earlier versions in `$CODEX_HOME/prompts/` (defaulting to `~/.codex/prompts/`)
 - migrates a legacy text `CHANGES.md` into `changes.db` (see below)
-- upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials)
+- upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials, v3 added the `concerns` table, its lifecycle triggers, the `concern_lines` view, and the guards that stop `INSERT OR REPLACE` from rewriting existing rows)
 - backs up every file it overwrites or removes first, unless you decline backups
 - runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a readable database (writable when a schema upgrade will touch it, and refused outright when its schema version is newer than the checkout supports), and a pending `CHANGES.md` migration must be able to rewrite `CHANGES.md` in place (a read-only or symlinked `CHANGES.md` is refused), create the database, and update `.gitignore`. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
 
@@ -291,11 +305,10 @@ Delete `CHANGES.md.migrated` once you are satisfied with the database, and commi
 Start session:
 
 ```txt
-/klawde     # full mode
-/klaude     # lean mode, code-craft rules off
+/klawde
 ```
 
-Claude reads the briefing and recent changes, then confirms the session is ready and which mode it is in.
+Claude reads the briefing and recent changes, then confirms the session is ready.
 
 Do the work.
 
@@ -305,7 +318,7 @@ End session:
 /close
 ```
 
-Claude records decision and scope changes, updates the briefing if needed, checks the log's integrity, and leaves the project in a state that the next session can pick up cleanly.
+Claude records decision and scope changes, triages its open concerns with you, updates the briefing if needed, checks the log's integrity, and leaves the project in a state that the next session can pick up cleanly.
 
 There is nothing else to run. The log is never maintained, tidied, or compacted — it keeps everything, and the reads stay bounded regardless.
 

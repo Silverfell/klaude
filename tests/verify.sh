@@ -147,6 +147,7 @@ echo "$out" > "$BASE/s5.out"
 check "S5 claude upgrade exit 0" test "$rc" -eq 0
 check "S5 CLAUDE.md matches template" cmp -s "$KLAWDE/template/CLAUDE.md" "$d/CLAUDE.md"
 check "S5 close.md matches template" cmp -s "$KLAWDE/template/close.md" "$d/.claude/commands/close.md"
+check "S5 retired klaude.md removed" bash -c "! test -f '$d/.claude/commands/klaude.md'"
 check "S5 schema installed" cmp -s "$KLAWDE/template/changes-schema.sql" "$d/.claude/changes-schema.sql"
 check "S5 source version printed" grepq 'source version: ' "$BASE/s5.out"
 check "S5 restart note printed" grepq 'restart it' "$BASE/s5.out"
@@ -169,13 +170,15 @@ out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --backup 2>&1)"; rc=$?
 n="$(ls "$d" "$d/.claude/commands" | grep -c '\.bak\.')"
 check "S5 --backup completes with .bak files" bash -c "test $rc -eq 0 && test $n -ge 4"
 
-echo "=== S5e: klaude.md alone counts as Claude detection evidence ==="
+echo "=== S5e: legacy klaude.md alone counts as Claude detection evidence, then is retired ==="
 d="$BASE/s5e"; mkdir -p "$d/.claude/commands"; echo "OLD klaude" > "$d/.claude/commands/klaude.md"
 out="$(cd "$d" && printf '\nn\n' | "$KLAWDE/upgrade.sh" 2>&1)"; rc=$?
 echo "$out" > "$BASE/s5e.out"
 check "S5e detected claude" grepq 'Enter for detected: claude' "$BASE/s5e.out"
 check "S5e exit 0" test "$rc" -eq 0
-check "S5e klaude.md upgraded" cmp -s "$KLAWDE/template/klaude.md" "$d/.claude/commands/klaude.md"
+check "S5e retirement message shown" grepq 'Removed retired .claude/commands/klaude.md' "$BASE/s5e.out"
+check "S5e klaude.md removed, klawde.md installed" \
+  bash -c "! test -f '$d/.claude/commands/klaude.md' && cmp -s '$KLAWDE/template/klawde.md' '$d/.claude/commands/klawde.md'"
 
 echo "=== S6: setup.sh fresh installs + guards ==="
 d="$BASE/s6"; mkdir -p "$d"
@@ -245,15 +248,17 @@ check "S8 garbage changes.db caught in preflight" grepq 'not a readable SQLite d
 check "S8 exit nonzero, CLAUDE.md untouched" bash -c "test $rc -ne 0 && grep -q 'OLD CONTRACT' '$d/CLAUDE.md'"
 d="$(mkfx s8b)"
 sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
-sqlite3 "$d/changes.db" 'DROP TRIGGER areas_no_update; DROP TRIGGER entries_no_backfill; PRAGMA user_version = 1;'
+sqlite3 "$d/changes.db" 'DROP TRIGGER areas_no_update; DROP TRIGGER entries_no_backfill; DROP TRIGGER entries_no_replace; DROP VIEW concern_lines; DROP TABLE concerns; PRAGMA user_version = 1;'
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
-check "S8b v1 db upgraded to v2 in place" \
-  bash -c "test $rc -eq 0 && test \"\$(sqlite3 -readonly '$d/changes.db' 'PRAGMA user_version;')\" = 2"
+check "S8b v1 db upgraded to v3 in place" \
+  bash -c "test $rc -eq 0 && test \"\$(sqlite3 -readonly '$d/changes.db' 'PRAGMA user_version;')\" = 3"
+check "S8b v1 path also gains the entries no-replace guard" \
+  test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='entries_no_replace';")" = "1"
 d="$(mkfx s8c)"
 sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
 chmod 444 "$d/changes.db"
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
-check "S8c read-only current (v2) db does not block the upgrade" test "$rc" -eq 0
+check "S8c read-only current (v3) db does not block the upgrade" test "$rc" -eq 0
 chmod 644 "$d/changes.db"
 d="$(mkfx s8d)"
 sqlite3 "$d/changes.db" 'PRAGMA user_version = 1; CREATE TABLE areas(area TEXT); CREATE TABLE entries(serial INTEGER);'
@@ -282,8 +287,9 @@ out="$(cd "$d" && /bin/bash "$KLAWDE/setup.sh" --claude 2>&1)"; rc=$?
 check "S9 setup under /bin/bash exit 0" test "$rc" -eq 0
 
 echo "=== S10: deprecated Codex prompts are retired from CODEX_HOME, never \$HOME ==="
-d="$BASE/s10"; mkdir -p "$d/.agents/skills/klawde"
+d="$BASE/s10"; mkdir -p "$d/.agents/skills/klawde" "$d/.agents/skills/klaude"
 echo "OLD SKILL" > "$d/.agents/skills/klawde/SKILL.md"; echo "OLD AGENTS" > "$d/AGENTS.md"
+echo "OLD LEAN SKILL" > "$d/.agents/skills/klaude/SKILL.md"
 mkdir -p "$CODEX_HOME/prompts"; echo "old prompt" > "$CODEX_HOME/prompts/klawde.md"
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s10.out"
@@ -291,6 +297,7 @@ check "S10 exit 0" test "$rc" -eq 0
 check "S10 klawde skill counts as artifact: no foreign prompt" ngrepq 'Overwrite AGENTS.md' "$BASE/s10.out"
 check "S10 retirement message printed" grepq 'Removed deprecated prompt' "$BASE/s10.out"
 check "S10 sandboxed prompt removed" bash -c "! test -f '$CODEX_HOME/prompts/klawde.md'"
+check "S10 retired klaude skill removed with its directory" bash -c "! test -e '$d/.agents/skills/klaude'"
 
 echo "=== S11: foreign .agents/skills does not pass for a klawde install ==="
 d="$BASE/s11"; mkdir -p "$d/.agents/skills/deploy"
@@ -351,7 +358,7 @@ d1="$BASE/s16a"; d2="$BASE/s16b"; mkdir -p "$d1" "$d2"
 (cd "$d2" && "$KLAWDE/upgrade.sh" --codex --no-backup < /dev/null >/dev/null 2>&1)
 same=1
 for f in AGENTS.md .agents/changes-schema.sql .agents/skills/klawde/SKILL.md \
-         .agents/skills/klaude/SKILL.md .agents/skills/close/SKILL.md; do
+         .agents/skills/close/SKILL.md; do
   cmp -s "$d1/$f" "$d2/$f" || same=0
 done
 check "S16 no drift between the duplicated codex writers" test "$same" -eq 1
@@ -359,7 +366,7 @@ check "S16 no drift between the duplicated codex writers" test "$same" -eq 1
 echo "=== S17: a changes.db from a newer klawde is refused ==="
 d="$(mkfx s17)"
 sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
-sqlite3 "$d/changes.db" 'PRAGMA user_version = 3;'
+sqlite3 "$d/changes.db" 'PRAGMA user_version = 4;'
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s17.out"
 check "S17 exit nonzero" test "$rc" -ne 0
@@ -417,6 +424,37 @@ check "S18 sub-bullets counted" bash -c "case '$out' in *'Key decisions 3,'*) ex
 check "S18 continuation line counted" bash -c "case '$out' in *'Next steps 2,'*) exit 0;; *) exit 1;; esac"
 check "S18 duplicate Current focus surfaces as a second name" bash -c "case '$out' in *'Current focus 1, Current focus (2026-06-01) 1,'*) exit 0;; *) exit 1;; esac"
 check "S18 blank line between fields not counted" bash -c "case '$out' in *'Open questions 1,'*) exit 0;; *) exit 1;; esac"
+
+echo "=== S19: v2 changes.db gains the concern objects in place, matching a fresh install ==="
+d="$(mkfx s19)"
+sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" 'DROP VIEW concern_lines; DROP TABLE concerns; PRAGMA user_version = 2;'
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s19.out"
+check "S19 exit 0" test "$rc" -eq 0
+check "S19 upgraded to v3" test "$(sqlite3 -readonly "$d/changes.db" 'PRAGMA user_version;')" = "3"
+check "S19 v3 message shown" grepq 'Upgraded the changes.db schema to v3' "$BASE/s19.out"
+fresh="$BASE/s19-fresh.db"
+sqlite3 "$fresh" < "$KLAWDE/template/changes-schema.sql"
+q="SELECT name, replace(coalesce(sql,''), 'IF NOT EXISTS ', '') FROM sqlite_master WHERE name LIKE 'concern%' OR name = 'entries_no_replace' ORDER BY name;"
+check "S19 in-place concern objects match the shipped schema" \
+  bash -c "test \"\$(sqlite3 -readonly '$d/changes.db' \"$q\")\" = \"\$(sqlite3 -readonly '$fresh' \"$q\")\""
+# The lifecycle the contract promises must actually be enforced by the upgraded db.
+sqlite3 "$d/changes.db" "INSERT INTO entries (type,area,description) VALUES ('decision','-','s19 decision');"
+sqlite3 "$d/changes.db" "INSERT INTO concerns (concern, ref_serial) VALUES ('s19 concern', 1);"
+check "S19 delete refused" bash -c "! sqlite3 '$d/changes.db' 'DELETE FROM concerns;' 2>/dev/null"
+check "S19 text edit refused" bash -c "! sqlite3 '$d/changes.db' \"UPDATE concerns SET concern='x' WHERE id=1;\" 2>/dev/null"
+check "S19 unknown area refused" bash -c "! sqlite3 '$d/changes.db' \"INSERT INTO concerns (area, concern) VALUES ('nope','y');\" 2>/dev/null"
+check "S19 dangling ref_serial refused" bash -c "! sqlite3 '$d/changes.db' \"INSERT INTO concerns (concern, ref_serial) VALUES ('z', 99);\" 2>/dev/null"
+check "S19 resolve is one-way" bash -c "sqlite3 '$d/changes.db' \"UPDATE concerns SET resolved=date('now','localtime'), resolution='done' WHERE id=1;\" && ! sqlite3 '$d/changes.db' \"UPDATE concerns SET resolved=NULL, resolution=NULL WHERE id=1;\" 2>/dev/null"
+check "S19 entry INSERT OR REPLACE refused" bash -c "! sqlite3 '$d/changes.db' \"INSERT OR REPLACE INTO entries (serial,type,area,description) VALUES (1,'note','-','evil');\" 2>/dev/null"
+check "S19 concern INSERT OR REPLACE refused" bash -c "! sqlite3 '$d/changes.db' \"INSERT OR REPLACE INTO concerns (id, concern) VALUES (1,'evil');\" 2>/dev/null"
+# close.md's integrity step states the trigger count; keep it synced to the schema.
+want="$(grep -o 'must print `[0-9]*`' "$KLAWDE/template/close.md" | tr -dc '0-9')"
+have="$(sqlite3 -readonly "$fresh" "SELECT count(*) FROM sqlite_master WHERE type='trigger';")"
+check "S19 close.md trigger count matches the schema ($have)" test "$want" = "$have"
+check "S19 upgraded db carries the full trigger set" \
+  bash -c "test \"\$(sqlite3 -readonly '$d/changes.db' \"SELECT count(*) FROM sqlite_master WHERE type='trigger';\")\" = \"$have\""
 
 echo ""
 echo "RESULT: $pass passed, $fail failed"

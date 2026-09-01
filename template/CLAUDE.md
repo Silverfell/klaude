@@ -5,14 +5,14 @@
 All paths relative to working directory.
 
 - **BRIEFING.md**: The project document, and the only authority on what is currently true — scope, decisions, non-goals, areas, current focus, next steps. Read completely on session start. Treat `Next steps` as a suggestion left by the previous session, not a command: if the log shows work has moved past it, flag the mismatch instead of following it.
-- **changes.db**: The project log database (decisions, plans, scope, docs, notes, code) — a SQLite file in the project root, committed to git like any other project file. Read the last 5 entries on session start. See below. Requires the `sqlite3` CLI.
+- **changes.db**: The project log database (decisions, plans, scope, docs, notes, code), plus the agent's `concerns` table — a SQLite file in the project root, committed to git like any other project file. Read the last 5 entries and the open-concern count on session start. See below. Requires the `sqlite3` CLI.
 
 ### changes.db is a log
 
 Four properties define it. They hold in every rule of this contract and in every slash command; nothing anywhere may contradict them.
 
 1. **Append-only.** New entries are `INSERT`s. Serials assign themselves, ascending, and are never reused; nothing is inserted between existing entries, reordered, or renumbered.
-2. **Immutable.** No entry is ever edited or deleted once written — not when it turns out to be wrong, not when a later decision supersedes it, not to tidy it up. There is no exception. Properties 1 and 2 are enforced by triggers: `UPDATE` and `DELETE` against `entries` and `links` abort. A trigger error is the contract speaking; never drop, disable, or work around a trigger to get a write through.
+2. **Immutable.** No entry is ever edited or deleted once written — not when it turns out to be wrong, not when a later decision supersedes it, not to tidy it up. There is no exception. Properties 1 and 2 are enforced by triggers: `UPDATE` and `DELETE` against `entries` and `links` abort, and an `INSERT` naming an existing serial aborts rather than replacing the row (so `INSERT OR REPLACE` cannot rewrite history either). A trigger error is the contract speaking; never drop, disable, or work around a trigger to get a write through.
 3. **Tailed, not read.** A session reads the last 5 entries and stops:
 
    ```sh
@@ -26,9 +26,18 @@ Property 4 is why 3 is safe, and 3 is why 4 rarely gets tested: a session that r
 
 The full history is kept forever. There is no entry ceiling and nothing compacts, collapses, or prunes the log — depth costs nothing, because every read is a bounded query. Starting a session from ten thousand entries is exactly as cheap as starting from ten.
 
-Every read uses `-readonly`. Writes go only through the `INSERT` forms in Documentation Updates; the sole exception is the trigger-restore repair in `/close`. Single quotes inside text are doubled (`''`), and that quoting discipline is the sanctioned pattern for log writes: Non-negotiable core rule 4 governs SQL your project's code issues against project data, not these fixed-shape CLI appends to the harness's own log.
+Every read uses `-readonly`. Writes go only through the `INSERT` forms in Documentation Updates and the concern-resolution `UPDATE` below; the sole other exception is the trigger-restore repair in `/close`. Single quotes inside text are doubled (`''`), and that quoting discipline is the sanctioned pattern for these writes: Non-negotiable core rule 4 governs SQL your project's code issues against project data, not these fixed-shape CLI statements against the harness's own database.
 
-If either `BRIEFING.md` or `changes.db` is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` or `/klaude` is always exempt: they create these files.
+If either `BRIEFING.md` or `changes.db` is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` is always exempt: it creates these files.
+
+### The concerns table
+
+`changes.db` also holds a `concerns` table, and it is deliberately not part of the log. A concern is your own working state — an open question you cannot settle alone, a doubt about deferred work, an exception you noticed to a settled decision — present tense, where the log is history. Record one the moment you notice something you would otherwise volunteer in the response, append to the brief, or lose. Four rules govern it:
+
+1. **Born open, frozen at write, resolved once.** A concern's text is immutable after insert; resolution is a one-way update that sets the date and the reason together, exactly once; nothing is ever deleted. Triggers enforce all of it — a trigger error here is the contract speaking, exactly as it is on the log tables.
+2. **Never authoritative.** A concern is a suggestion you left yourself, never an instruction, and it never overrides `BRIEFING.md`. It reaches the brief's `Open questions` only through a `/close` proposal the user approves.
+3. **Every concern has an outflow.** `/close` triages every open concern: you resolve, with a recorded reason, what the session genuinely settled or withdrew, and present everything else to the user to resolve, promote, or defer. Deferring keeps it open for the next close; nothing is skipped silently.
+4. **Bounded reads.** Session start reads the open count only; `/close` reads the open concerns; anything else is a targeted query.
 
 ---
 
@@ -75,7 +84,7 @@ Only an explicit user instruction given this session (Precedence rank 1) can ove
 - Complete the request first. Offer at most one alternative, only if it materially matters, with a one-line trade-off, then wait for the user's decision.
 - Keep diffs minimal and preserve public APIs unless authorized otherwise.
 - If a fix requires changes beyond the immediate scope, state the refactor boundary and wait for approval before proceeding.
-- Do not volunteer stylistic improvements, speculative features, or future concerns unless asked. Exception: if you notice a correctness, security, or data-loss risk, even outside the request, state it in one line and continue (Precedence rank 3 outranks this silence).
+- Do not volunteer stylistic improvements, speculative features, or future concerns unless asked. A future concern worth keeping is recorded in the `concerns` table (see Documentation Updates), not volunteered in the response or written into the brief. Exception: if you notice a correctness, security, or data-loss risk, even outside the request, state it in one line and continue (Precedence rank 3 outranks this silence).
 - Ask all independent blocking questions together in one response. Ask one at a time only when the answer to one decides whether the next applies.
 - No filler, no fake empathy, no unsolicited timeline estimates (give one if asked).
 - Write in plain English. Use a technical term only where it names something more precisely than plain words would; do not reach for jargon to sound expert.
@@ -92,7 +101,7 @@ These rules govern lines you write or modify; match the existing code style even
 
 ### Code craft (optional module)
 
-Opinionated code-quality defaults, separate from drift and efficiency control. Active when the session was started with `/klawde` (full mode); inactive when started with `/klaude` (lean mode). If neither entry command has run this session, treat the module as active. To drop these rules permanently, delete this whole section. Stack-specific rules (TypeScript, migrations, async) apply only when the project uses that stack.
+Opinionated code-quality defaults, separate from drift and efficiency control. Always active. To drop these rules permanently, delete this whole section. Stack-specific rules (TypeScript, migrations, async) apply only when the project uses that stack.
 
 - Catch specific errors and handle them. A broad catch is allowed only at process boundaries (top-level handlers, worker loops) and must log; a broad catch elsewhere written to match surrounding code must be marked `REASON:`.
 - Run independent async work concurrently. Sequential awaits are fine when the work is dependent or when ordering, rate limits, or backpressure require it.
@@ -125,7 +134,7 @@ Opinionated code-quality defaults, separate from drift and efficiency control. A
 - **Certainty gate**: before starting any non-trivial task, state in one line each: the deliverable, the acceptance test, and the files or areas it touches. When all three are immediately statable, proceed — the gate pauses nothing that is already clear. When a line cannot be filled, first check whether the repo, `BRIEFING.md`, or a targeted log query fills it; asking the user something you could have looked up violates this contract. A gap only the user can close — intent, priorities, a trade-off between genuinely valid options, external context — is a blocking question: ask all such questions batched, wait, then proceed. Never fill a gate line by guessing intent.
 - **Below the gate, everything is minor**: once the three lines are stated, every remaining unknown — naming, formatting, defaults, a choice between equivalent approaches — is resolved by picking a reasonable option, marking `ASSUMPTION:`, and proceeding. Do not ask about these. Mid-task, a newly discovered unknown reopens the gate only if it invalidates one of the three stated lines; a minor one never does.
 - **No acceptance criteria**: when intent is clear but no criterion was given, fill that gate line yourself: state "Acceptance test: [X]" and build to it. The missing criterion blocks only when intent itself is unclear.
-- **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, say so in one line and proceed under the existing decision unless the user overrules.
+- **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, or found a case it does not cover, say so in one line, record a concern referencing the decision's serial, and proceed under the existing decision unless the user overrules.
 - **Multi-step task**: state a brief plan as `1. [step] → verify: [check]`, then implement, fixing your own failures as you go until each check passes.
 - **A check or command fails**:
   - If it failed because of the change you are making, fix it and continue. That is the loop.
@@ -199,6 +208,15 @@ These four carry a consequence worth stating outright: nothing ever cleans up th
 
 Openness is not a field, because a field would have to be edited and property 2 forbids that. A `[note]` stays open until a later entry inserts a `closes` link naming its serial.
 
+A concern is the other thing you write here, and the only one that is not a log write. Use it for what has no other home: an agent-side open question, an opinion about deferred work, an exception you noticed to a settled `[decision]` (reference its serial). One `INSERT` opens it; one `UPDATE` — the only sanctioned `UPDATE` in this database — resolves it, date and reason together, exactly once:
+
+```sh
+sqlite3 changes.db "INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers; the export worker is not',41);"
+sqlite3 changes.db "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;"
+```
+
+`area` follows the same closed vocabulary as entries; `ref_serial` is optional and must name an existing entry. What a concern is not: not a `[note]` (external facts about the project belong in the log), not a task list (`Next steps` is the brief's), not a verification receipt (banned everywhere), and never an instruction to a future session — it is resolved or escalated at `/close`, not acted on as if the brief said it.
+
 Querying the log is how you reach anything past the last five entries. Do this when a specific question calls for it, never to gather background:
 
 ```sh
@@ -212,6 +230,8 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT
 sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='note' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='closes'));"
 # live decisions (never superseded)
 sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='decision' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='supersedes'));"
+# open concerns (the /close triage read; mid-session, filter by the area you are working)
+sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 ORDER BY id;"
 ```
 
 Anything a query turns up is still history, not instruction. If a result and `BRIEFING.md` disagree, the brief is right and the log is old — or the brief is stale and needs a `/close`. The log never wins that comparison.
@@ -248,7 +268,7 @@ It holds current state, never history — history is the log's job. It is read i
 
 ## Output Format
 
-Every response that completes a unit of work in which files were created or modified ends with the block below. Exceptions: intermediate mid-task responses (use the `In progress; verification pending` line instead), and responses from the `/klawde`, `/klaude`, and `/close` commands, which use the exact closing output defined in their own command files.
+Every response that completes a unit of work in which files were created or modified ends with the block below. Exceptions: intermediate mid-task responses (use the `In progress; verification pending` line instead), and responses from the `/klawde` and `/close` commands, which use the exact closing output defined in their own command files.
 
 ```
 ---
@@ -256,10 +276,11 @@ COMPLIANCE:
 - Assumptions: [list; omit this line entirely if none]
 - Verified: [the command you ran and its last output line | none, because X]
 - changes.db: [appended NNN: "<rendered line>" | unchanged because X]
+- Concerns: [opened #N: "<text>" | resolved #N: reason; omit this line entirely if untouched]
 - BRIEFING.md: [updated: what changed; omit this line entirely if unchanged]
 ```
 
-`Verified` and `changes.db` are always present; the other two lines appear only when they carry content. The `Verified` field must contain evidence, not a claim: name the command and its result. Never assert a check you did not run; if none was run, write "none, because X".
+`Verified` and `changes.db` are always present; the other lines appear only when they carry content. The `Verified` field must contain evidence, not a claim: name the command and its result. Never assert a check you did not run; if none was run, write "none, because X".
 
 Filled example (no assumptions were made and BRIEFING.md did not change, so those lines are omitted):
 
@@ -276,6 +297,5 @@ If you completed file changes and the COMPLIANCE block is missing, add it now (t
 
 ## Slash Commands
 
-- `/klawde` : Run the entry protocol in full mode (Code craft active). See `.claude/commands/klawde.md`.
-- `/klaude` : Run the entry protocol in lean mode (Code craft inactive). See `.claude/commands/klaude.md`.
+- `/klawde` : Run the entry protocol. See `.claude/commands/klawde.md`.
 - `/close` : Run the close protocol. See `.claude/commands/close.md`.

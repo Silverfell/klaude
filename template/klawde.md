@@ -2,8 +2,6 @@
 
 Run this at the start of every session. Do not proceed with any task until complete.
 
-This command starts the framework in full mode, with the Code craft module active. To start without the programming rules, the user runs `/klaude` instead, which follows these same steps in lean mode.
-
 ## Steps
 
 1. Check existence with `ls BRIEFING.md changes.db 2>/dev/null`. Note which printed and which did not. Also run `command -v sqlite3` — the harness keeps its log in a SQLite database and cannot run without that CLI; if it is missing, stop and tell the user to install it (macOS ships it; on Linux it is the `sqlite3` package). Also run `git status --porcelain 2>/dev/null` and note any pre-existing uncommitted changes. Dirty state is informational only, never a reason to block: it may be unfinished work from a prior session.
@@ -73,6 +71,14 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 
    The log has no ceiling and is never trimmed: it keeps its full history forever, and the read above stays five lines whatever that history costs. Never propose pruning, collapsing, or archiving it.
 
+   Then read one number — the count of open concerns, the agent-side questions and doubts left by earlier sessions:
+
+```sh
+sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NULL;"
+```
+
+   The count is the whole read: open concerns are triaged at `/close`, never at session start, and a specific one is looked up mid-session only when the work touches it (filter `concern_lines` by area). If the query fails because the table does not exist, the database predates schema v3: put `schema pre-v3 — run upgrade.sh` on the `Concerns` line of the output and continue; do not alter the schema yourself.
+
 8. Compare BRIEFING.md's stated purpose and current scope against the five entries you just read. If they contradict the brief (work on something the scope excludes, or a `[scope]` or `[decision]` entry the brief does not reflect), output the specific contradiction, recommend the user reconcile BRIEFING.md or run `/close` first, and stop. Do not output the "OK. Ready." block.
 
    The brief is the authority in this comparison. A disagreement means one of the two is stale — usually the brief, if the last session ended without a `/close`. It never means the log wins.
@@ -94,8 +100,8 @@ OK. Ready.
 BRIEFING.md: <one-sentence summary of current briefing>
 changes.db: <one-sentence summary of recent changes>
 Focus: <Current focus and Next steps | unset | stale: reason>
+Concerns: <N open | none | schema pre-v3 — run upgrade.sh>
 Dirty: <uncommitted files found in step 1 | clean | not a git repo>
-Mode: <full (Code craft active) | lean (Code craft inactive), per the command that invoked this protocol>
 ```
 
    If the uncommitted changes look related to `Current focus` or `Next steps` (likely unfinished work), add one line after the block saying so.

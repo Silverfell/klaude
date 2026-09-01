@@ -64,7 +64,7 @@ prompt_read() {
 # partial checkout would otherwise abort mid-copy and leave a partial install.
 check_templates() {
   local f missing=0
-  for f in CLAUDE.md klawde.md klaude.md close.md changes-schema.sql; do
+  for f in CLAUDE.md klawde.md close.md changes-schema.sql; do
     if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
       echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
       missing=1
@@ -152,10 +152,8 @@ rewrite_codex() {
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
       -e 's#`/klawde`#`$klawde`#g' \
-      -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's|^# /klawde: |# $klawde: |' \
-      -e 's|^# /klaude: |# $klaude: |' \
       -e 's|^# /close: |# $close: |' \
       "$1"
 }
@@ -195,7 +193,7 @@ install_claude() {
     cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
     echo "Copied $dst."
   fi
-  for cmd in klawde.md klaude.md close.md; do
+  for cmd in klawde.md close.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -231,11 +229,9 @@ install_codex() {
     echo "Wrote $dst."
   fi
   install_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
-  install_skill klaude klaude.md \
-    "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
+    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start."
   install_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, update BRIEFING.md, and verify log integrity before ending work."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
   # The log schema $klawde uses to create changes.db on first run.
   dst="$TARGET_DIR/.agents/changes-schema.sql"
   if should_write "$dst"; then
@@ -249,7 +245,7 @@ install_codex() {
 if [ "$TARGET" != "codex" ]; then
   check_no_symlink "$TARGET_DIR/CLAUDE.md"
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
-              "$TARGET_DIR/.claude/commands/klaude.md" "$TARGET_DIR/.claude/commands/close.md" \
+              "$TARGET_DIR/.claude/commands/close.md" \
               "$TARGET_DIR/.claude/changes-schema.sql"; do
     check_dest "$path"
   done
@@ -257,7 +253,7 @@ fi
 if [ "$TARGET" != "claude" ]; then
   check_no_symlink "$TARGET_DIR/AGENTS.md"
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
-              "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$TARGET_DIR/.agents/skills/close/SKILL.md" \
+              "$TARGET_DIR/.agents/skills/close/SKILL.md" \
               "$TARGET_DIR/.agents/changes-schema.sql"; do
     check_dest "$path"
   done
@@ -286,13 +282,13 @@ echo "Done. Project initialized at $TARGET_DIR (target: $TARGET, source version:
 case "$TARGET" in
   claude)
     echo "Wrote CLAUDE.md, .claude/commands/ and .claude/changes-schema.sql in this project."
-    echo "Run /klawde in Claude Code to start a session (or /klaude to start without the code-craft rules)." ;;
+    echo "Run /klawde in Claude Code to start a session." ;;
   codex)
     echo "Wrote AGENTS.md, .agents/skills/ and .agents/changes-schema.sql in this project."
-    echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session; \$klaude starts without the code-craft rules." ;;
+    echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session." ;;
   both)
     echo "Wrote CLAUDE.md + .claude/ (Claude Code) and AGENTS.md + .agents/ (Codex), including the log schema for each."
-    echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session; klaude is the variant without the code-craft rules." ;;
+    echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session." ;;
 esac
 if [ "$TARGET" != "codex" ]; then
   echo "If a Claude Code session is already open in this project, restart it: slash commands load at session start."

@@ -69,7 +69,7 @@ prompt_read() {
 # partial checkout would otherwise abort mid-copy and leave a partial upgrade.
 check_templates() {
   local f missing=0
-  for f in CLAUDE.md klawde.md klaude.md close.md changes-schema.sql; do
+  for f in CLAUDE.md klawde.md close.md changes-schema.sql; do
     if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
       echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
       missing=1
@@ -248,19 +248,21 @@ schema="$SCRIPT_DIR/template/changes-schema.sql"
 # Refuse symlinked, unwritable and unremovable destinations before any write.
 if [ "$TARGET" != "codex" ]; then
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
-              "$TARGET_DIR/.claude/commands/klaude.md" "$TARGET_DIR/.claude/commands/close.md" \
+              "$TARGET_DIR/.claude/commands/close.md" \
               "$TARGET_DIR/.claude/changes-schema.sql"; do
     check_dest "$path"
   done
   check_removal "$TARGET_DIR/.claude/commands/init.md"
+  check_removal "$TARGET_DIR/.claude/commands/klaude.md"
   check_removal "$TARGET_DIR/.claude/commands/compresschanges.md"
 fi
 if [ "$TARGET" != "claude" ]; then
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
-              "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$TARGET_DIR/.agents/skills/close/SKILL.md" \
+              "$TARGET_DIR/.agents/skills/close/SKILL.md" \
               "$TARGET_DIR/.agents/changes-schema.sql"; do
     check_dest "$path"
   done
+  check_removal "$TARGET_DIR/.agents/skills/klaude/SKILL.md"
   check_removal "$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
   for old in klawde close compresschanges; do
     check_removal "${CODEX_HOME:-$HOME/.codex}/prompts/$old.md"
@@ -270,9 +272,9 @@ fi
 if [ -f "$db" ]; then
   if ! uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;' 2>/dev/null)"; then
     bad_dest "changes.db exists but is not a readable SQLite database."
-  elif [ "$uv" -gt 2 ]; then
-    bad_dest "changes.db schema is v$uv, newer than this checkout supports (v2); run 'git pull' in $SCRIPT_DIR and retry."
-  elif [ "$uv" -lt 2 ]; then
+  elif [ "$uv" -gt 3 ]; then
+    bad_dest "changes.db schema is v$uv, newer than this checkout supports (v3); run 'git pull' in $SCRIPT_DIR and retry."
+  elif [ "$uv" -lt 3 ]; then
     # The schema upgrade below writes it in place.
     check_dest "$db"
   fi
@@ -306,10 +308,8 @@ rewrite_codex() {
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
       -e 's#`/klawde`#`$klawde`#g' \
-      -e 's#`/klaude`#`$klaude`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's|^# /klawde: |# $klawde: |' \
-      -e 's|^# /klaude: |# $klaude: |' \
       -e 's|^# /close: |# $close: |' \
       "$1"
 }
@@ -332,7 +332,7 @@ upgrade_claude() {
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
   echo "Overwrote $dst."
-  for cmd in klawde.md klaude.md close.md; do
+  for cmd in klawde.md close.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if [ -f "$dst" ]; then maybe_backup "$dst"; fi
     mkdir -p "$(dirname "$dst")"
@@ -351,6 +351,13 @@ upgrade_claude() {
     maybe_backup "$legacy_init"
     rm -f "$legacy_init"
     echo "Removed legacy .claude/commands/init.md."
+  fi
+  # Retire /klaude (the lean variant is gone; /klawde is the entry protocol).
+  local legacy_klaude="$TARGET_DIR/.claude/commands/klaude.md"
+  if [ -f "$legacy_klaude" ]; then
+    maybe_backup "$legacy_klaude"
+    rm -f "$legacy_klaude"
+    echo "Removed retired .claude/commands/klaude.md."
   fi
   # Retire /compresschanges (the log is never compacted now).
   local legacy_compress="$TARGET_DIR/.claude/commands/compresschanges.md"
@@ -378,17 +385,23 @@ upgrade_codex() {
   rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
   echo "Overwrote $dst."
   upgrade_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol (full mode): read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start, with the Code craft module active."
-  upgrade_skill klaude klaude.md \
-    "Run only when explicitly invoked. Klawde entry protocol (lean mode): same as klawde, but with the Code craft module disabled for the session."
+    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start."
   upgrade_skill close close.md \
-    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, update BRIEFING.md, and verify log integrity before ending work."
+    "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
   # The log schema $klawde uses to create changes.db on first run.
   dst="$TARGET_DIR/.agents/changes-schema.sql"
   if [ -f "$dst" ]; then maybe_backup "$dst"; fi
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
   echo "Overwrote $dst."
+  # Retire the klaude skill (the lean variant is gone; $klawde is the entry protocol).
+  local legacy_klaude_skill="$TARGET_DIR/.agents/skills/klaude/SKILL.md"
+  if [ -f "$legacy_klaude_skill" ]; then
+    maybe_backup "$legacy_klaude_skill"
+    rm -f "$legacy_klaude_skill"
+    rmdir "$(dirname "$legacy_klaude_skill")" 2>/dev/null || true
+    echo "Removed retired .agents/skills/klaude/SKILL.md."
+  fi
   # Retire the compresschanges skill (the log is never compacted now).
   local legacy_skill="$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
   if [ -f "$legacy_skill" ]; then
@@ -738,24 +751,51 @@ fi
 # ---------------------------------------------------------------------------
 # Upgrade an existing changes.db to the current schema version, in place.
 # v1 -> v2 added the areas_no_update and entries_no_backfill triggers.
+# v2 -> v3 added the concerns table, its triggers, the concern_lines view, and
+# the no-replace guards that stop INSERT OR REPLACE from rewriting rows.
+# Every statement is extracted from the shipped schema, so the two cannot drift.
 # ---------------------------------------------------------------------------
+add_trigger_from_schema() {
+  local trig="$1" stmt
+  stmt="$(sed -n "/^CREATE TRIGGER $trig /,/END;/p" "$schema")"
+  if [ -z "$stmt" ]; then
+    echo "Error: trigger $trig not found in $schema; cannot upgrade the changes.db schema." >&2
+    exit 1
+  fi
+  printf '%s\n' "$stmt" \
+    | sed '1s/^CREATE TRIGGER /CREATE TRIGGER IF NOT EXISTS /' \
+    | sqlite3 -bail "$db"
+}
 if [ -f "$db" ]; then
   uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;')"
-  if [ "$uv" -lt 2 ]; then
+  if [ "$uv" -lt 3 ]; then
     maybe_backup "$db"
+  fi
+  if [ "$uv" -lt 2 ]; then
     for trig in areas_no_update entries_no_backfill; do
-      stmt="$(sed -n "/^CREATE TRIGGER $trig /,/END;/p" "$schema")"
-      if [ -z "$stmt" ]; then
-        echo "Error: trigger $trig not found in $schema; cannot upgrade the changes.db schema." >&2
-        exit 1
-      fi
-      printf '%s\n' "$stmt" \
-        | sed '1s/^CREATE TRIGGER /CREATE TRIGGER IF NOT EXISTS /' \
-        | sqlite3 -bail "$db"
+      add_trigger_from_schema "$trig"
     done
     sqlite3 -bail "$db" 'PRAGMA user_version = 2;'
     echo ""
     echo "Upgraded the changes.db schema to v2 (added the areas_no_update and entries_no_backfill triggers)."
+  fi
+  if [ "$uv" -lt 3 ]; then
+    tbl="$(sed -n '/^CREATE TABLE concerns (/,/^);/p' "$schema")"
+    view="$(sed -n '/^CREATE VIEW concern_lines /,/^  FROM concerns c;$/p' "$schema")"
+    if [ -z "$tbl" ] || [ -z "$view" ]; then
+      echo "Error: concerns table or concern_lines view not found in $schema; cannot upgrade the changes.db schema." >&2
+      exit 1
+    fi
+    printf '%s\n' "$tbl" | sed '1s/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /' | sqlite3 -bail "$db"
+    for trig in concerns_no_delete concerns_immutable_text concerns_resolve_once \
+                concerns_born_open concerns_area_known concerns_ref_exists \
+                concerns_no_replace entries_no_replace; do
+      add_trigger_from_schema "$trig"
+    done
+    printf '%s\n' "$view" | sed '1s/^CREATE VIEW /CREATE VIEW IF NOT EXISTS /' | sqlite3 -bail "$db"
+    sqlite3 -bail "$db" 'PRAGMA user_version = 3;'
+    echo ""
+    echo "Upgraded the changes.db schema to v3 (added the concerns table, its triggers and view, and the no-replace guards on entries and concerns)."
   fi
 fi
 

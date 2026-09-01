@@ -20,7 +20,7 @@ sqlite3 changes.db "INSERT INTO entries (type, area, description, refs) VALUES (
 ```
 
    - The serial and the date assign themselves. Never pass either by hand, never reuse or renumber one. Several entries take consecutive serials in the order you insert them. Read the serials back from the tail query for the closing block — each `sqlite3` call is its own connection, so `last_insert_rowid()` from a later call tells you nothing.
-   - `area` is one of the areas listed in `BRIEFING.md`, or `-` when none fits. A spelling that is not in the `areas` table aborts the insert; that is the vocabulary defending itself, not an error to route around. If the area is genuinely new, add it in step 3 first.
+   - `area` is one of the areas listed in `BRIEFING.md`, or `-` when none fits. A spelling that is not in the `areas` table aborts the insert; that is the vocabulary defending itself, not an error to route around. If the area is genuinely new, add it in step 4 first.
    - Types: `decision`, `plan`, `doc`, `scope`, `code`, `note`. For `decision`, name the rejected alternative when one exists (`X over Y; reason`).
    - Double every single quote inside the text (`don''t`).
    - Relationships are separate inserts, never edits of an entry. Use `closes` when this session resolved an open `[note]`; the note itself is left exactly as it is.
@@ -38,7 +38,33 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 
    If any of this session's work contradicts `Current scope`, `Non-goals`, or `Do-not-touch` in BRIEFING.md, flag the contradiction to the user before the closing block; do not silently record around it.
 
-3. Review whether any of the following changed during this session:
+3. **Triage every open concern.** Concerns are your own working state — open questions, doubts about deferred work, exceptions noticed to settled decisions — parked in the `concerns` table so they never land in the brief. First, open one for anything this session left you holding that has no other home, referencing the log entry it is about where one exists:
+
+```sh
+sqlite3 changes.db "INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers; the export worker is not',41);"
+```
+
+   Then read everything open:
+
+```sh
+sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 ORDER BY id;"
+```
+
+   (If that fails because the table does not exist, the database predates schema v3: note it in the closing block, recommend `upgrade.sh`, and skip this step. Do not alter the schema yourself.)
+
+   Dispose of every one; the protocol does not finish with a concern silently skipped:
+
+   - **Resolve it yourself** only when this session genuinely answered it, made it moot, or you no longer hold it — and say why, because the reason is recorded forever. Never resolve a live concern to shorten the list; an empty list is not the goal, an honest one is.
+
+```sh
+sqlite3 changes.db "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent this session' WHERE id = 7;"
+```
+
+   - **Present the rest to the user in one batched block**, each with a proposed disposition: resolve (say why), promote to `Open questions` in the brief, or keep open. Wait for the answer. A "defer" keeps the concern open, and it will be presented again at the next close — that is the design, not a failure. Consent given here for a promotion carries into step 4's `Open questions` edit.
+
+   A concern's text is never edited, a resolved one is frozen, and nothing is deleted; the triggers refuse all three. If a concern needs restating, resolve it (`superseded by #N`) and open the restated one.
+
+4. Review whether any of the following changed during this session:
    - Project purpose or scope
    - Key architectural or design decisions
    - Non-goals or explicit exclusions
@@ -46,10 +72,10 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 
    If any of the above changed, update `BRIEFING.md` accordingly. An empty field in `BRIEFING.md` (e.g., Purpose) counts as changed: draft it from what this session revealed. Keep it concise but sufficient to brief a new contributor; match the example brief in `.claude/commands/klawde.md`.
 
-   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history, and it is bounded by shape: one bullet per field, one line each, a sentence or a short list of clauses. Before writing, check every field against that shape. A field that has grown sub-bullets, paragraphs, or dated entries is restored to one line: what is still true is condensed into the line, what narrates a past session becomes a log entry in step 2 if the log does not already hold it, and working notes — findings, progress, verification results, things tried — are dropped, because they were never the brief's to keep. Report a restored field on the closing block. Step 6 measures the result; a field it finds still over one line sends you back here.
+   Regardless of the list above, always maintain the state fields. BRIEFING.md holds current state, never history, and it is bounded by shape: one bullet per field, one line each, a sentence or a short list of clauses. Before writing, check every field against that shape. A field that has grown sub-bullets, paragraphs, or dated entries is restored to one line: what is still true is condensed into the line, what narrates a past session becomes a log entry in step 2 if the log does not already hold it, and working notes — findings, progress, verification results, things tried — are dropped, because they were never the brief's to keep. Report a restored field on the closing block. Step 7 measures the result; a field it finds still over one line sends you back here.
    - `Current focus`: **replace** it, never append a second one. There is exactly one, present tense. A brief that has accumulated several dated `Current focus` bullets has stopped being a brief.
    - `Next steps`: rewrite every close; clear it if nothing is pending. Stale next steps mislead the following session.
-   - `Open questions`: changed only with the user's explicit consent. If this session raised a question worth listing, or answered one already listed, present the exact addition or removal and ask before writing `BRIEFING.md`; wait for the answer. A change the user explicitly asked for earlier this session needs no second ask. Without a clear yes, leave the field exactly as it is.
+   - `Open questions`: changed only with the user's explicit consent. If this session raised a question worth listing, or answered one already listed, present the exact addition or removal and ask before writing `BRIEFING.md`; wait for the answer. A change the user explicitly asked for earlier this session needs no second ask, and a promotion the user approved during step 3's triage counts as consent. Without a clear yes, leave the field exactly as it is — an agent-side question without that consent stays in the `concerns` table, not here.
    - `Areas`: the closed vocabulary `changes.db` tags against. If it is empty, seed it now from the parts of the project that actually take work (subsystems, not file names — `auth`, `ingest`, `cli`). Add an area when work starts landing somewhere the list does not cover. Whenever the brief gains an area, add it to the database too, or entries tagged with it will be refused:
 
      ```sh
@@ -64,34 +90,35 @@ sqlite3 changes.db "INSERT INTO links VALUES (58, 43, 'closes');"
 
    A field is trimmed by removing what is no longer true, never by dropping live state to hit a number. A large project legitimately carries more open questions than a small one. What does not belong at any size: a bullet that narrates a past session rather than stating current state (`Styling pass`, `Auth refactor`, `Cleanup pass`). That is history — move it to `changes.db` or cut it.
 
-4. **Check the log's integrity.** The database is the project's memory and it is committed to git; a corrupt file or a missing trigger is worth catching at the close that caused it rather than three sessions later.
+5. **Check the log's integrity.** The database is the project's memory and it is committed to git; a corrupt file or a missing trigger is worth catching at the close that caused it rather than three sessions later.
 
 ```sh
 sqlite3 -readonly changes.db "PRAGMA integrity_check;"
 sqlite3 -readonly changes.db "SELECT count(*) FROM sqlite_master WHERE type='trigger';"
 ```
 
-   The first must print `ok`; the second must print `9`. If triggers are missing, the append-only and immutability guarantees are not being enforced — restore the missing trigger(s) by running their individual `CREATE TRIGGER` statements from `.claude/changes-schema.sql` against the database, and report it on the closing block. If `integrity_check` reports anything other than `ok`, do not attempt a repair: report it and stop, so the user can recover the file from git.
+   The first must print `ok`; the second must print `17` (or `9` on a pre-v3 database that step 3 already flagged). If triggers are missing, the append-only and immutability guarantees are not being enforced — restore the missing trigger(s) by running their individual `CREATE TRIGGER` statements from `.claude/changes-schema.sql` against the database, and report it on the closing block. This repair covers only triggers whose tables exist: a pre-v3 database is short the concern objects as a set, and those come from `upgrade.sh`, never from here. If `integrity_check` reports anything other than `ok`, do not attempt a repair: report it and stop, so the user can recover the file from git.
 
-5. Write only the file(s) you changed. If neither changed, do not write. Do not stage or commit. Leave changes dirty so the user controls when they enter git history.
+6. Write only the file(s) you changed. If neither changed, do not write. Do not stage or commit. Leave changes dirty so the user controls when they enter git history.
 
-6. **Measure the brief's shape.** Run this against the file as it now stands on disk — after the write in step 5, never from memory, and even when the brief was not touched this session:
+7. **Measure the brief's shape.** Run this against the file as it now stands on disk — after the write in step 6, never from memory, and even when the brief was not touched this session:
 
 ```sh
 awk 'BEGIN { printf "Shape:" } /^- [^:]+:/ { if (f != "") { printf "%s %s %d", s, f, n; s = "," } f = $0; sub(/:.*/, "", f); sub(/^- /, "", f); n = 0 } NF { n++ } END { if (f != "") printf "%s %s %d", s, f, n; print "" }' BRIEFING.md
 ```
 
-   It prints one `Field N` pair per field, `N` being the non-blank lines that field occupies. The shape is every count exactly 1, and exactly the eleven field names of the template, once each. A count above 1 is a sub-bullet, a wrapped paragraph, or a dated entry on its own line; a repeated name is a second `Current focus`. Either means step 3 missed a field: go back to it, restore that field to one line (what is still true condensed into the line, what narrates a past session into the log via step 2, working notes dropped), write again, and measure again. The closing block is not printed while any count is not 1. This protocol does not finish with a sub-bullet in the brief.
+   It prints one `Field N` pair per field, `N` being the non-blank lines that field occupies. The shape is every count exactly 1, and exactly the eleven field names of the template, once each. A count above 1 is a sub-bullet, a wrapped paragraph, or a dated entry on its own line; a repeated name is a second `Current focus`. Either means step 4 missed a field: go back to it, restore that field to one line (what is still true condensed into the line, what narrates a past session into the log via step 2, working notes dropped), write again, and measure again. The closing block is not printed while any count is not 1. This protocol does not finish with a sub-bullet in the brief.
 
-7. Output exactly this format, then stop:
+8. Output exactly this format, then stop:
 
 ```
 Session closed.
 changes.db: [N] new entries (serials [X]-[Y] | none); integrity ok [| integrity: <problem>].
+concerns: [N] open (opened [X], resolved [Y] this session | untouched) [| schema pre-v3 — run upgrade.sh].
 BRIEFING.md: [updated | unchanged] [; restored to shape: <fields>].
-Shape: <the step 6 output, verbatim — Purpose 1, Current scope 1, … Environment quirks 1>
+Shape: <the step 7 output, verbatim — Purpose 1, Current scope 1, … Environment quirks 1>
 ```
 
-   The `Shape` line is the measurement's own output pasted in, never typed from expectation. It reads all 1s by construction: a block with any other number in it was printed against step 6.
+   The `Shape` line is the measurement's own output pasted in, never typed from expectation. It reads all 1s by construction: a block with any other number in it was printed against step 7. The `concerns` line's open count is real only if step 3 disposed of every open concern; an open concern the user never saw contradicts this block.
 
 Do not skip this protocol. If nothing recordable changed, say so and confirm both files are unchanged; the `Shape` line is still measured and printed.
