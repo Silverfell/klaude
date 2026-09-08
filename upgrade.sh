@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve the directory where this script lives (the source of truth)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the directory where this script lives (the source of truth), through
+# a symlink if it was invoked as one.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$self")" && pwd)"
 
 # Target is the current working directory (where the user invokes from)
 TARGET_DIR="$(pwd)"
@@ -82,6 +88,15 @@ check_templates() {
 }
 check_templates
 
+# The highest changes.db schema version this checkout installs and upgrades
+# to, read from the shipped schema so the two cannot drift.
+SCHEMA_MAX="$(sed -n 's/^PRAGMA user_version = \([0-9][0-9]*\);$/\1/p' "$SCRIPT_DIR/template/changes-schema.sql")"
+case "$SCHEMA_MAX" in
+  ''|*[!0-9]*)
+    echo "Error: $SCRIPT_DIR/template/changes-schema.sql carries no PRAGMA user_version; the checkout looks corrupt." >&2
+    exit 1 ;;
+esac
+
 # The two contracts must be distinct regular files: writing one through a
 # symlink would clobber the other layout's contract with rewritten content.
 check_no_symlink() {
@@ -132,6 +147,32 @@ check_removal() {
     bad_dest "cannot remove $1 (its directory is not writable)."
   fi
 }
+# Klawde's retired files are recognised by the title line (or, for Codex
+# skills, the front-matter name line) the shipped versions carried — never by
+# vocabulary, since a user's own file about BRIEFING.md or changes.db would
+# carry the same words. A same-named file without the fingerprint is left alone.
+FP_INIT='^# /init( |:)'
+FP_KLAUDE='^# /klaude( |:)'
+FP_COMPRESS='^# /compresschanges( |:)'
+FP_SKILL_KLAUDE='^name: klaude$'
+FP_SKILL_COMPRESS='^name: compresschanges$'
+is_klawde_file() { [ -f "$1" ] && grep -Eq "$2" "$1"; }   # <path> <fingerprint>
+# A retired file about to be removed: only one that is klawde's needs a writable directory.
+check_retirement() { if is_klawde_file "$1" "$2"; then check_removal "$1"; fi; }
+# Remove a retired klawde file (backing it up first); leave a same-named file
+# that is not klawde's in place and say so. Returns 0 only when it removed.
+retire_file() { # retire_file <path> <fingerprint> <phrase>
+  local f="$1" fp="$2" what="$3"
+  if is_klawde_file "$f" "$fp"; then
+    maybe_backup "$f"
+    rm -f "$f"
+    echo "Removed $what."
+    return 0
+  elif [ -f "$f" ]; then
+    echo "Left $what in place: it does not carry klawde's own title line, so it is not klawde's."
+  fi
+  return 1
+}
 gate_preflight() {
   if [ "$PREFLIGHT_BAD" -eq 1 ]; then
     echo "Nothing was changed. Fix the problems above and re-run." >&2
@@ -147,16 +188,27 @@ has_claude=0
 has_codex=0
 codex_artifacts=0
 if [ -f "$TARGET_DIR/CLAUDE.md" ]; then has_claude=1; fi
-for f in klawde.md klaude.md close.md init.md; do
+for f in klawde.md close.md; do
   if [ -f "$TARGET_DIR/.claude/commands/$f" ]; then has_claude=1; fi
 done
+# A retired name counts only when the file is klawde's; a user's own init.md
+# must not turn a project into a klawde install.
+if is_klawde_file "$TARGET_DIR/.claude/commands/init.md" "$FP_INIT" \
+   || is_klawde_file "$TARGET_DIR/.claude/commands/klaude.md" "$FP_KLAUDE" \
+   || is_klawde_file "$TARGET_DIR/.claude/commands/compresschanges.md" "$FP_COMPRESS"; then
+  has_claude=1
+fi
 if [ -f "$TARGET_DIR/.claude/changes-schema.sql" ]; then has_claude=1; fi
 if [ -f "$TARGET_DIR/AGENTS.md" ]; then has_codex=1; fi
 # Only klawde's own files count as Codex evidence: .agents/skills is a shared
 # convention, and another tool's skills must not pass for a klawde install.
-for f in klawde klaude close compresschanges; do
+for f in klawde close; do
   if [ -f "$TARGET_DIR/.agents/skills/$f/SKILL.md" ]; then codex_artifacts=1; fi
 done
+if is_klawde_file "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$FP_SKILL_KLAUDE" \
+   || is_klawde_file "$TARGET_DIR/.agents/skills/compresschanges/SKILL.md" "$FP_SKILL_COMPRESS"; then
+  codex_artifacts=1
+fi
 if [ -f "$TARGET_DIR/.agents/changes-schema.sql" ]; then codex_artifacts=1; fi
 if [ "$codex_artifacts" -eq 1 ]; then has_codex=1; fi
 DETECTED=""
@@ -245,6 +297,39 @@ changes="$TARGET_DIR/CHANGES.md"
 db="$TARGET_DIR/changes.db"
 schema="$SCRIPT_DIR/template/changes-schema.sql"
 
+# The area names a legacy CHANGES.md and the brief's Areas line carry, one per
+# line, sorted, cleaned of markdown and whitespace: the preflight refuses
+# case-variant duplicates from this list, and the migration seeds the
+# vocabulary from it, so the two cannot disagree.
+legacy_areas() {
+  {
+    if [ -f "$TARGET_DIR/BRIEFING.md" ]; then
+      grep -m1 -E '^[[:space:]]*-[[:space:]]*Areas:' "$TARGET_DIR/BRIEFING.md" \
+        | sed -E 's/^[[:space:]]*-[[:space:]]*Areas:[[:space:]]*//' | tr ',;' '\n\n' || true
+    fi
+    awk '{ sub(/\r$/, "") }
+         /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {
+           rest = substr($0, 12)
+           sub(/^[0-9]+[ ]+\[[a-z]+\][ ]+/, "", rest)
+           if (match(rest, /^\([^)]*\)/)) print substr(rest, 2, RLENGTH - 2)
+         }' "$changes"
+  } | sed -E 's/[`*]//g; s/^[[:space:]]+//; s/[[:space:]]*\.?[[:space:]]*$//; s/^_+//; s/_+$//' \
+    | grep -v '^$' | grep -vx -- '-' | sort -u || true
+}
+
+# The triggers and views the shipped schema defines that a database lacks, one
+# name per line. Empty for a whole database of the current version.
+db_missing() { # db_missing <db>
+  local kind name
+  for kind in TRIGGER VIEW; do
+    sed -n "s/^CREATE $kind \([a-z_]*\) .*/\1/p" "$schema" | while IFS= read -r name; do
+      if [ "$(sqlite3 -readonly "$1" "SELECT count(*) FROM sqlite_master WHERE name='$name';")" = "0" ]; then
+        echo "$name"
+      fi
+    done
+  done
+}
+
 # Refuse symlinked, unwritable and unremovable destinations before any write.
 if [ "$TARGET" != "codex" ]; then
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
@@ -252,9 +337,9 @@ if [ "$TARGET" != "codex" ]; then
               "$TARGET_DIR/.claude/changes-schema.sql"; do
     check_dest "$path"
   done
-  check_removal "$TARGET_DIR/.claude/commands/init.md"
-  check_removal "$TARGET_DIR/.claude/commands/klaude.md"
-  check_removal "$TARGET_DIR/.claude/commands/compresschanges.md"
+  check_retirement "$TARGET_DIR/.claude/commands/init.md" "$FP_INIT"
+  check_retirement "$TARGET_DIR/.claude/commands/klaude.md" "$FP_KLAUDE"
+  check_retirement "$TARGET_DIR/.claude/commands/compresschanges.md" "$FP_COMPRESS"
 fi
 if [ "$TARGET" != "claude" ]; then
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
@@ -262,20 +347,31 @@ if [ "$TARGET" != "claude" ]; then
               "$TARGET_DIR/.agents/changes-schema.sql"; do
     check_dest "$path"
   done
-  check_removal "$TARGET_DIR/.agents/skills/klaude/SKILL.md"
-  check_removal "$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
-  for old in klawde close compresschanges; do
-    check_removal "${CODEX_HOME:-$HOME/.codex}/prompts/$old.md"
-  done
+  check_retirement "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$FP_SKILL_KLAUDE"
+  check_retirement "$TARGET_DIR/.agents/skills/compresschanges/SKILL.md" "$FP_SKILL_COMPRESS"
 fi
 # Migration and schema-upgrade targets (target-agnostic; see below).
-if [ -f "$db" ]; then
+if [ -e "$db" ] && [ ! -f "$db" ]; then
+  bad_dest "changes.db exists but is not a regular file; move it aside and re-run."
+elif [ -f "$db" ]; then
   if ! uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;' 2>/dev/null)"; then
     bad_dest "changes.db exists but is not a readable SQLite database."
-  elif [ "$uv" -gt 3 ]; then
-    bad_dest "changes.db schema is v$uv, newer than this checkout supports (v3); run 'git pull' in $SCRIPT_DIR and retry."
-  elif [ "$uv" -lt 3 ]; then
+  elif [ "$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('entries','areas');" 2>/dev/null)" != "2" ]; then
+    # An empty file or a foreign database reads as a version-0 SQLite file.
+    bad_dest "changes.db exists but is not a klawde log (no entries/areas tables); move it aside and re-run."
+  elif { [ "$uv" -ge 3 ] && [ "$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('links','legacy_summaries','concerns');" 2>/dev/null)" != "3" ]; } \
+    || { [ "$uv" -lt 3 ] && [ "$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('links','legacy_summaries');" 2>/dev/null)" != "2" ]; }; then
+    # A klawde log short of a table its version should have: nothing here can
+    # rebuild the rows it held, so refuse before any write.
+    bad_dest "changes.db is missing a table its schema version v$uv should have; recover the file from git before upgrading."
+  elif [ "$uv" -gt "$SCHEMA_MAX" ]; then
+    bad_dest "changes.db schema is v$uv, newer than this checkout supports (v$SCHEMA_MAX); run 'git pull' in $SCRIPT_DIR and retry."
+  elif [ "$uv" -lt "$SCHEMA_MAX" ]; then
     # The schema upgrade below writes it in place.
+    check_dest "$db"
+  elif [ -n "$(db_missing "$db")" ]; then
+    # Current version, but a trigger or view has gone missing: the repair
+    # below writes it back.
     check_dest "$db"
   fi
 elif [ -f "$changes" ]; then
@@ -284,6 +380,19 @@ elif [ -f "$changes" ]; then
   check_dest "$changes"
   check_dest "$db"
   if [ -f "$TARGET_DIR/.gitignore" ]; then check_dest "$TARGET_DIR/.gitignore"; fi
+  # Serials must be unique. A repeat would abort the import only after the
+  # harness files were overwritten, so catch it before anything is written.
+  dups="$(awk '{ sub(/\r$/, "") } /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ { s = $2 + 0; if (s in seen) d[s] = 1; seen[s] = 1 } END { for (s in d) printf "%d ", s }' "$changes")"
+  if [ -n "$dups" ]; then
+    bad_dest "CHANGES.md repeats serial(s) ${dups% }; serials must be unique. Fix the file and re-run."
+  fi
+  # The vocabulary refuses a second spelling of an area that differs only by
+  # case, and the import would hit that refusal after the harness files were
+  # written; catch it here, where nothing has been touched yet.
+  case_dups="$(legacy_areas | awk '{ k = tolower($0); if (k in seen) printf "%s vs %s; ", seen[k], $0; else seen[k] = $0 }')"
+  if [ -n "$case_dups" ]; then
+    bad_dest "CHANGES.md or the brief's Areas line carries areas that differ only by case (${case_dups%; }); unify the spelling in both files and re-run."
+  fi
 fi
 gate_preflight
 
@@ -295,7 +404,9 @@ echo ""
 maybe_backup() {
   local path="$1"
   if [ "$BACKUP" = "yes" ]; then
-    local backup="$path.bak.$(date +%Y%m%d-%H%M%S)"
+    local backup="$path.bak.$(date +%Y%m%d-%H%M%S)" n=0
+    # Two backups of one file within a second must not overwrite each other.
+    while [ -e "$backup" ]; do n=$((n + 1)); backup="$path.bak.$(date +%Y%m%d-%H%M%S).$n"; done
     cp "$path" "$backup"
     echo "Backed up $(basename "$path") to $(basename "$backup")."
   fi
@@ -326,8 +437,17 @@ build_skill_file() {
   } > "$dst"
 }
 
+# The contract's Code craft section is optional; users delete it. The overwrite
+# below brings it back, so say so rather than restoring it silently.
+note_code_craft() {
+  if [ -f "$1" ] && ! grep -q '^### Code craft' "$1"; then
+    echo "Note: $(basename "$1") has no Code craft section; the upgrade restores it. Delete the section again if you do not want it."
+  fi
+}
+
 upgrade_claude() {
   local dst="$TARGET_DIR/CLAUDE.md"
+  note_code_craft "$dst"
   if [ -f "$dst" ]; then maybe_backup "$dst"; fi
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
@@ -345,27 +465,12 @@ upgrade_claude() {
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
   echo "Overwrote $dst."
-  # Retire the legacy /init command (entry protocol is now /klawde).
-  local legacy_init="$TARGET_DIR/.claude/commands/init.md"
-  if [ -f "$legacy_init" ]; then
-    maybe_backup "$legacy_init"
-    rm -f "$legacy_init"
-    echo "Removed legacy .claude/commands/init.md."
-  fi
-  # Retire /klaude (the lean variant is gone; /klawde is the entry protocol).
-  local legacy_klaude="$TARGET_DIR/.claude/commands/klaude.md"
-  if [ -f "$legacy_klaude" ]; then
-    maybe_backup "$legacy_klaude"
-    rm -f "$legacy_klaude"
-    echo "Removed retired .claude/commands/klaude.md."
-  fi
-  # Retire /compresschanges (the log is never compacted now).
-  local legacy_compress="$TARGET_DIR/.claude/commands/compresschanges.md"
-  if [ -f "$legacy_compress" ]; then
-    maybe_backup "$legacy_compress"
-    rm -f "$legacy_compress"
-    echo "Removed retired .claude/commands/compresschanges.md."
-  fi
+  # Retire the legacy /init command (entry protocol is now /klawde), /klaude
+  # (the lean variant is gone) and /compresschanges (the log is never
+  # compacted now) — each only when the file is klawde's.
+  retire_file "$TARGET_DIR/.claude/commands/init.md" "$FP_INIT" "legacy .claude/commands/init.md" || true
+  retire_file "$TARGET_DIR/.claude/commands/klaude.md" "$FP_KLAUDE" "retired .claude/commands/klaude.md" || true
+  retire_file "$TARGET_DIR/.claude/commands/compresschanges.md" "$FP_COMPRESS" "retired .claude/commands/compresschanges.md" || true
 }
 
 # name | template file | skill description
@@ -380,12 +485,13 @@ upgrade_skill() {
 
 upgrade_codex() {
   local dst="$TARGET_DIR/AGENTS.md"
+  note_code_craft "$dst"
   if [ -f "$dst" ]; then maybe_backup "$dst"; fi
   mkdir -p "$(dirname "$dst")"
   rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
   echo "Overwrote $dst."
   upgrade_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start."
+    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, the last 5 changes.db log entries, and the open-concern counts by area (creating BRIEFING.md and changes.db if missing), then confirm readiness at session start."
   upgrade_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
   # The log schema $klawde uses to create changes.db on first run.
@@ -394,57 +500,48 @@ upgrade_codex() {
   mkdir -p "$(dirname "$dst")"
   cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
   echo "Overwrote $dst."
-  # Retire the klaude skill (the lean variant is gone; $klawde is the entry protocol).
-  local legacy_klaude_skill="$TARGET_DIR/.agents/skills/klaude/SKILL.md"
-  if [ -f "$legacy_klaude_skill" ]; then
-    maybe_backup "$legacy_klaude_skill"
-    rm -f "$legacy_klaude_skill"
-    rmdir "$(dirname "$legacy_klaude_skill")" 2>/dev/null || true
-    echo "Removed retired .agents/skills/klaude/SKILL.md."
-  fi
-  # Retire the compresschanges skill (the log is never compacted now).
-  local legacy_skill="$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
-  if [ -f "$legacy_skill" ]; then
-    maybe_backup "$legacy_skill"
-    rm -f "$legacy_skill"
+  # Retire the klaude skill (the lean variant is gone; $klawde is the entry
+  # protocol) and the compresschanges skill (the log is never compacted now),
+  # each only when the file is klawde's; an emptied skill directory goes too.
+  # Nothing outside the project is ever touched: klawde never installed Codex
+  # prompts under the home directory, so there is nothing of its own to retire there.
+  local legacy_skill
+  legacy_skill="$TARGET_DIR/.agents/skills/klaude/SKILL.md"
+  if retire_file "$legacy_skill" "$FP_SKILL_KLAUDE" "retired .agents/skills/klaude/SKILL.md"; then
     rmdir "$(dirname "$legacy_skill")" 2>/dev/null || true
-    echo "Removed retired .agents/skills/compresschanges/SKILL.md."
   fi
-  # Retire deprecated global prompts from earlier versions (honors CODEX_HOME).
-  local prompts_dir="${CODEX_HOME:-$HOME/.codex}/prompts"
-  for old in klawde close compresschanges; do
-    local legacy_prompt="$prompts_dir/$old.md"
-    if [ -f "$legacy_prompt" ]; then
-      maybe_backup "$legacy_prompt"
-      rm -f "$legacy_prompt"
-      echo "Removed deprecated prompt $legacy_prompt."
-    fi
-  done
+  legacy_skill="$TARGET_DIR/.agents/skills/compresschanges/SKILL.md"
+  if retire_file "$legacy_skill" "$FP_SKILL_COMPRESS" "retired .agents/skills/compresschanges/SKILL.md"; then
+    rmdir "$(dirname "$legacy_skill")" 2>/dev/null || true
+  fi
 }
 
-# From the first write onward, any abort must say the install may be partial
-# instead of dying quietly with some files upgraded and some stale.
+# Before the first write an abort leaves the project untouched; from the first
+# write onward it must say the install may be partial instead of dying quietly
+# with some files upgraded and some stale.
+WRITES_STARTED=0
 on_fail() {
   echo "" >&2
-  echo "Error: the upgrade did NOT complete; this install may be partially updated." >&2
+  if [ "$WRITES_STARTED" -eq 1 ]; then
+    echo "Error: the upgrade did NOT complete; this install may be partially updated." >&2
+  else
+    echo "Error: the upgrade did not start; nothing was changed." >&2
+  fi
   echo "Fix the problem above and re-run upgrade.sh." >&2
 }
 # All migration scratch files live in one directory so every exit path —
 # success, explicit abort, or a set -e death — removes them in one sweep.
 MIGTMP=""
+MIGRATION_READY=0
 cleanup_migtmp() { if [ -n "$MIGTMP" ]; then rm -rf "$MIGTMP"; fi; }
 trap 'rc=$?; cleanup_migtmp; if [ "$rc" -ne 0 ]; then on_fail; fi' EXIT
 
-case "$TARGET" in
-  claude) upgrade_claude ;;
-  codex)  upgrade_codex ;;
-  both)   upgrade_claude; upgrade_codex ;;
-esac
-
 # ---------------------------------------------------------------------------
-# Migrate a legacy text CHANGES.md into the changes.db log (runs once).
-# Target-agnostic: the log lives in the project root under either layout.
-# The $changes / $db / $schema paths are set above, before the preflight.
+# Prepare the migration of a legacy text CHANGES.md into the changes.db log
+# (runs once). Target-agnostic: the log lives in the project root under either
+# layout. The $changes / $db / $schema paths are set above, before the
+# preflight. Everything is prepared in a scratch directory and committed only
+# after the harness files are written, below.
 # ---------------------------------------------------------------------------
 echo ""
 if [ -f "$db" ]; then
@@ -459,6 +556,14 @@ elif [ ! -f "$schema" ]; then
   exit 1
 else
   MIGTMP="$(mktemp -d)"
+  # Everything below is prepared here, in MIGTMP: a normalized copy of
+  # CHANGES.md, the SQL, and a complete import into a scratch database,
+  # verified. Nothing in the project is written until all of it has succeeded,
+  # so a file that cannot be imported stops the upgrade with nothing changed.
+  src="$changes"
+  changes="$MIGTMP/CHANGES.md"
+  cp "$src" "$changes"
+  dbwork="$MIGTMP/changes.db"
 
   # --- Normalization: bring legacy text formats up to the last text format ---
   # so the import pass below only has to understand one line shape.
@@ -478,20 +583,13 @@ else
     needs_serials=1
   fi
 
-  changes_note="CHANGES.md was not modified."
+  normalized=0
   backfilled=0
   premax=0
 
   if [ "$needs_crlf" -eq 1 ] || [ "$needs_conversion" -eq 1 ] || [ "$needs_serials" -eq 1 ]; then
     echo "Normalizing legacy CHANGES.md entries before import."
-
-    # Back up first (if enabled) so the original is recoverable
-    maybe_backup "$changes"
-    if [ "$BACKUP" = "yes" ]; then
-      changes_note="CHANGES.md was normalized in place (content preserved; the original is in its .bak file)."
-    else
-      changes_note="CHANGES.md was normalized in place (content preserved; backups were declined)."
-    fi
+    normalized=1
 
     if [ "$needs_crlf" -eq 1 ]; then
       # Strip CRs before the passes below, so none can leak into a description.
@@ -555,11 +653,11 @@ else
     fi
   fi
 
-  echo "Migrating CHANGES.md into changes.db."
+  echo "Preparing the migration of CHANGES.md into changes.db."
 
-  # --- Create the database from the shipped schema -------------------------
-  rm -f "$db"
-  sqlite3 -bail "$db" < "$schema"
+  # --- Create the database from the shipped schema, in the scratch dir -----
+  rm -f "$dbwork"
+  sqlite3 -bail "$dbwork" < "$schema"
 
   sql="$MIGTMP/sql"
   diag="$MIGTMP/diag"
@@ -573,22 +671,14 @@ else
   # --- Seed the closed area vocabulary -------------------------------------
   # Sources: the brief's "- Areas:" line, plus every area actually used by an
   # entry. Both are needed: an entry whose area is unknown aborts on insert.
-  if [ -f "$TARGET_DIR/BRIEFING.md" ]; then
-    grep -m1 -E '^[[:space:]]*-[[:space:]]*Areas:' "$TARGET_DIR/BRIEFING.md" \
-      | sed -E 's/^[[:space:]]*-[[:space:]]*Areas:[[:space:]]*//' \
-      | tr ',' '\n' >> "$areas_raw" || true
-  fi
-  awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {
-         rest = substr($0, 12)
-         sub(/^[0-9]+[ ]+\[[a-z]+\][ ]+/, "", rest)
-         if (match(rest, /^\([^)]*\)/)) print substr(rest, 2, RLENGTH - 2)
-       }' "$changes" >> "$areas_raw"
+  # legacy_areas strips markdown formatting (`import`, **cli**, _api_) so it
+  # cannot become part of the vocabulary: areas are permanent once seeded.
+  legacy_areas > "$areas_raw"
 
   echo "BEGIN;" > "$sql"
-  sed -E 's/^[[:space:]]+//; s/[[:space:]]*\.?[[:space:]]*$//' "$areas_raw" \
-    | grep -v '^$' | grep -vx -- '-' | sort -u \
-    | sed -E "s/'/''/g; s/^(.*)\$/INSERT OR IGNORE INTO areas VALUES ('\\1');/" >> "$sql" || true
+  sed -E "s/'/''/g; s/^(.*)\$/INSERT OR IGNORE INTO areas VALUES ('\\1');/" "$areas_raw" >> "$sql" || true
   area_count="$(grep -c '^INSERT OR IGNORE INTO areas' "$sql" || true)"
+  area_list="$(sed -n "s/^INSERT OR IGNORE INTO areas VALUES ('\(.*\)');\$/\1/p" "$sql" | tr '\n' ' ')"
 
   # --- Emit entry, summary and link inserts --------------------------------
   # Links go last: a link naming a serial that has not been inserted yet is
@@ -613,6 +703,11 @@ else
       rest = substr(rest, RLENGTH + 2)
       match(rest, /^\([^)]*\)/)
       area = substr(rest, 2, RLENGTH - 2)
+      # The same cleaning legacy_areas applies when seeding the vocabulary,
+      # so the entry names the area exactly as it was seeded.
+      gsub(/[`*]/, "", area)
+      sub(/^[ \t]+/, "", area); sub(/[ \t]*\.?[ \t]*$/, "", area)
+      sub(/^_+/, "", area); sub(/_+$/, "", area)
       desc = substr(rest, RLENGTH + 2)
       refs = ""
       # Tags sit at the tail, separated from the description by two spaces
@@ -625,7 +720,7 @@ else
         k = substr(tok, 1, p - 1)
         v = substr(tok, p + 1)
         if (k == "refs") refs = v
-        else addlink(serial, v + 0, k)
+        else { nv = split(v, vs, ","); for (vi = 1; vi <= nv; vi++) addlink(serial, vs[vi] + 0, k) }
       }
       sub(/[ ]+$/, "", desc)
       if (desc == "") desc = "(no description)"
@@ -693,24 +788,39 @@ else
     esac
   done < "$diag"
 
-  if ! sqlite3 -bail "$db" < "$sql"; then
-    rm -f "$db"
-    echo "Error: importing CHANGES.md into changes.db failed. No database was written. $changes_note" >&2
+  if ! sqlite3 -bail "$dbwork" < "$sql" 2> "$MIGTMP/imperr"; then
+    # Find the statement the schema refused, so the message names the entry
+    # rather than a line number in a file the user never sees.
+    rm -f "$MIGTMP/probe.db"; sqlite3 -bail "$MIGTMP/probe.db" < "$schema"
+    bad=""; why=""
+    while IFS= read -r stmt; do
+      case "$stmt" in "BEGIN;"|"COMMIT;") continue ;; esac
+      if ! why="$(printf '%s\n' "$stmt" | sqlite3 -bail "$MIGTMP/probe.db" 2>&1 >/dev/null)"; then
+        bad="$stmt"; break
+      fi
+    done < "$sql"
+    echo "Error: CHANGES.md cannot be imported into changes.db. Nothing was changed." >&2
+    if [ -n "$bad" ]; then
+      echo "  Refused: $bad" >&2
+      echo "  Reason: ${why#*: }" >&2
+    else
+      sed 's/^/  /' "$MIGTMP/imperr" >&2
+    fi
+    echo "Fix that entry in CHANGES.md and re-run." >&2
     exit 1
   fi
 
   # --- Verify the import against the file it came from ---------------------
   file_entries="$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]+ \[[a-z]+\] \(' "$changes" || true)"
   file_max="$(awk '/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9]+ \[[a-z]+\] \(/ {v = $2 + 0; if (v > m) m = v} END {print m + 0}' "$changes")"
-  db_entries="$(sqlite3 -readonly "$db" 'SELECT count(*) FROM entries;')"
-  db_max="$(sqlite3 -readonly "$db" 'SELECT coalesce(max(serial), 0) FROM entries;')"
+  db_entries="$(sqlite3 -readonly "$dbwork" 'SELECT count(*) FROM entries;')"
+  db_max="$(sqlite3 -readonly "$dbwork" 'SELECT coalesce(max(serial), 0) FROM entries;')"
 
   if [ "$db_entries" != "$file_entries" ] || [ "$db_max" != "$file_max" ] || [ "$awk_entries" != "$file_entries" ] || [ "$awk_max" != "$file_max" ]; then
-    rm -f "$db"
-    echo "Error: migration verification failed." >&2
+    echo "Error: migration verification failed. Nothing was changed." >&2
     echo "  CHANGES.md: $file_entries entries, max serial $file_max" >&2
-    echo "  changes.db: $db_entries entries, max serial $db_max" >&2
-    echo "No database was written. $changes_note Report this with a copy of CHANGES.md." >&2
+    echo "  scratch db: $db_entries entries, max serial $db_max" >&2
+    echo "Report this with a copy of CHANGES.md." >&2
     exit 1
   fi
 
@@ -721,11 +831,33 @@ else
   if [ "$backfilled" -gt 0 ] && [ "$premax" -gt 0 ]; then
     mig_desc="$mig_desc; serials $(printf '%03d' $((premax + 1)))-$(printf '%03d' $((premax + backfilled))) are backfilled pre-serial entries, older than their serial order suggests"
   fi
-  sqlite3 -bail "$db" "INSERT INTO entries (type, area, description) VALUES ('doc','-','$mig_desc');"
-  mig_serial="$(sqlite3 -readonly "$db" 'SELECT max(serial) FROM entries;')"
+  sqlite3 -bail "$dbwork" "INSERT INTO entries (type, area, description) VALUES ('doc','-','$mig_desc');"
+  mig_serial="$(sqlite3 -readonly "$dbwork" 'SELECT max(serial) FROM entries;')"
+  MIGRATION_READY=1
+  echo "Migration prepared and verified in a scratch database; it is committed after the harness files below."
+fi
 
-  # --- Retire the text log -------------------------------------------------
-  mv -f "$changes" "$changes.migrated"
+# ---------------------------------------------------------------------------
+# Write the harness files. This is the first write to the project.
+# ---------------------------------------------------------------------------
+WRITES_STARTED=1
+case "$TARGET" in
+  claude) upgrade_claude ;;
+  codex)  upgrade_codex ;;
+  both)   upgrade_claude; upgrade_codex ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Commit the prepared migration: the original CHANGES.md is backed up (when
+# backups are on and it was normalized), its normalized form becomes
+# CHANGES.md.migrated, and the verified scratch database becomes changes.db.
+# ---------------------------------------------------------------------------
+if [ "$MIGRATION_READY" -eq 1 ]; then
+  echo ""
+  if [ "$normalized" -eq 1 ]; then maybe_backup "$src"; fi
+  cp -f "$changes" "$src.migrated"
+  rm -f "$src"
+  mv -f "$dbwork" "$db"
   if command -v git >/dev/null 2>&1 && git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     gitignore="$TARGET_DIR/.gitignore"
     if ! { [ -f "$gitignore" ] && grep -qxF 'CHANGES.md.migrated' "$gitignore"; }; then
@@ -737,13 +869,20 @@ else
     fi
   fi
 
-  echo "Migrated $file_entries entries (max serial $file_max), $link_count links, $sum_count legacy monthly summaries, $area_count areas."
+  echo "Migrated $file_entries entries (max serial $file_max), $link_count links, $sum_count legacy monthly summaries, $area_count areas${area_list:+ (${area_list% })}."
   echo "Appended migration entry $(printf '%03d' "$mig_serial") [doc] recording the import."
   if [ "$backfilled" -gt 0 ] && [ "$premax" -gt 0 ]; then
     echo "Warning: $backfilled pre-serial entries were backfilled with serials above the pre-existing maximum ($premax), so the session-start tail will show those oldest entries as most recent until new entries are written. Entry $(printf '%03d' "$mig_serial") records this."
   fi
   if [ "$skip_count" -gt 0 ]; then
-    echo "Skipped $skip_count link(s) that pointed at serials the file no longer contains (see warnings above)."
+    echo "Skipped $skip_count link(s) the import could not place (see warnings above)."
+  fi
+  if [ "$normalized" -eq 1 ]; then
+    if [ "$BACKUP" = "yes" ]; then
+      echo "CHANGES.md was normalized on the way in (content preserved); the original is in its .bak file."
+    else
+      echo "CHANGES.md was normalized on the way in (content preserved); backups were declined."
+    fi
   fi
   echo "CHANGES.md is now CHANGES.md.migrated. Delete it once you are satisfied with changes.db, and commit changes.db like any other project file."
 fi
@@ -753,6 +892,9 @@ fi
 # v1 -> v2 added the areas_no_update and entries_no_backfill triggers.
 # v2 -> v3 added the concerns table, its triggers, the concern_lines view, and
 # the no-replace guards that stop INSERT OR REPLACE from rewriting rows.
+# v3 -> v4 added the guards on concern ids, area names, legacy summaries, and
+# well-formed text and dates.
+# v4 -> v5 added the one-line guards on text and the plain-name guard on areas.
 # Every statement is extracted from the shipped schema, so the two cannot drift.
 # ---------------------------------------------------------------------------
 add_trigger_from_schema() {
@@ -768,7 +910,7 @@ add_trigger_from_schema() {
 }
 if [ -f "$db" ]; then
   uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;')"
-  if [ "$uv" -lt 3 ]; then
+  if [ "$uv" -lt "$SCHEMA_MAX" ]; then
     maybe_backup "$db"
   fi
   if [ "$uv" -lt 2 ]; then
@@ -796,6 +938,63 @@ if [ -f "$db" ]; then
     sqlite3 -bail "$db" 'PRAGMA user_version = 3;'
     echo ""
     echo "Upgraded the changes.db schema to v3 (added the concerns table, its triggers and view, and the no-replace guards on entries and concerns)."
+  fi
+  if [ "$uv" -lt 4 ]; then
+    for trig in concerns_no_backfill areas_name_clean legacy_summaries_no_update \
+                legacy_summaries_no_delete entries_well_formed concerns_well_formed \
+                concerns_resolution_well_formed; do
+      add_trigger_from_schema "$trig"
+    done
+    sqlite3 -bail "$db" 'PRAGMA user_version = 4;'
+    echo ""
+    echo "Upgraded the changes.db schema to v4 (added the guards on concern ids, area names, legacy summaries, and well-formed text and dates)."
+  fi
+  if [ "$uv" -lt 5 ]; then
+    for trig in entries_one_line concerns_one_line concerns_resolution_one_line areas_name_plain; do
+      add_trigger_from_schema "$trig"
+    done
+    sqlite3 -bail "$db" 'PRAGMA user_version = 5;'
+    echo ""
+    echo "Upgraded the changes.db schema to v5 (added the one-line guards on text and the plain-name guard on areas)."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Every present database is checked whole before "Done", and repaired where the
+# shipped schema can: a trigger or view that has gone missing is recreated
+# (every statement carries IF NOT EXISTS, so this is idempotent and is what
+# /close points the user at), a missing table is reported and the run fails,
+# because only git still holds the rows it had. The file is the project's
+# memory and is committed to git; it must never pass through here damaged.
+# ---------------------------------------------------------------------------
+if [ -f "$db" ]; then
+  for name in $(sed -n 's/^CREATE TABLE \([a-z_]*\) .*/\1/p' "$schema"); do
+    if [ "$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='$name';")" = "0" ]; then
+      echo "Error: changes.db is missing its $name table. Recover the file from git; nothing here can rebuild its rows." >&2
+      exit 1
+    fi
+  done
+  restored=""
+  for name in $(db_missing "$db"); do
+    if sed -n "/^CREATE TRIGGER $name /,/END;/p" "$schema" | grep -q .; then
+      add_trigger_from_schema "$name"
+    else
+      sed -n "/^CREATE VIEW $name /,/;$/p" "$schema" \
+        | sed '1s/^CREATE VIEW /CREATE VIEW IF NOT EXISTS /' | sqlite3 -bail "$db"
+    fi
+    restored="$restored $name"
+  done
+  ic="$(sqlite3 -readonly "$db" 'PRAGMA integrity_check;')"
+  have_trig="$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='trigger';")"
+  want_trig="$(grep -c '^CREATE TRIGGER' "$schema")"
+  if [ "$ic" != "ok" ] || [ "$have_trig" != "$want_trig" ]; then
+    echo "Error: changes.db failed its check (integrity: $ic; triggers: $have_trig of $want_trig). Recover the file from git." >&2
+    exit 1
+  fi
+  if [ -n "$restored" ]; then
+    echo "changes.db checked: integrity ok, $have_trig triggers; restored missing:${restored}."
+  else
+    echo "changes.db checked: integrity ok, $have_trig triggers."
   fi
 fi
 

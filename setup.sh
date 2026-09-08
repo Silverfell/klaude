@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve the directory where this script lives (the source of truth)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the directory where this script lives (the source of truth), through
+# a symlink if it was invoked as one.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$self")" && pwd)"
 
 # Target is the current working directory (where the user invokes from)
 TARGET_DIR="$(pwd)"
@@ -229,7 +235,7 @@ install_codex() {
     echo "Wrote $dst."
   fi
   install_skill klawde klawde.md \
-    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full and the last 5 changes.db log entries (creating either if missing), then confirm readiness at session start."
+    "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, the last 5 changes.db log entries, and the open-concern counts by area (creating BRIEFING.md and changes.db if missing), then confirm readiness at session start."
   install_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
   # The log schema $klawde uses to create changes.db on first run.

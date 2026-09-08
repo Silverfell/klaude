@@ -1,4 +1,4 @@
-PRAGMA user_version = 3;
+PRAGMA user_version = 5;
 
 CREATE TABLE areas (
   name TEXT PRIMARY KEY CHECK (name <> '')
@@ -91,6 +91,47 @@ CREATE TRIGGER concerns_ref_exists BEFORE INSERT ON concerns
 CREATE TRIGGER concerns_no_replace BEFORE INSERT ON concerns
   WHEN NEW.id IS NOT NULL AND EXISTS (SELECT 1 FROM concerns WHERE id = NEW.id)
   BEGIN SELECT RAISE(ABORT, 'concern ids are never reused; INSERT OR REPLACE cannot rewrite a concern'); END;
+
+-- v4 guards: concern ids append only; area names trimmed, never '-', and never
+-- a case variant of an existing area (a second spelling would split a facet
+-- for good); legacy summaries frozen; text and dates well formed, because the
+-- GLOB checks above accept '9999-99-99' and a blank made of spaces.
+CREATE TRIGGER concerns_no_backfill AFTER INSERT ON concerns
+  WHEN NEW.id < (SELECT max(id) FROM concerns)
+  BEGIN SELECT RAISE(ABORT, 'concern ids append only; never insert below an existing id'); END;
+CREATE TRIGGER areas_name_clean BEFORE INSERT ON areas
+  WHEN NEW.name <> trim(NEW.name) OR NEW.name = '-'
+    OR EXISTS (SELECT 1 FROM areas WHERE lower(name) = lower(NEW.name) AND name <> NEW.name)
+  BEGIN SELECT RAISE(ABORT, 'area names are trimmed, never ''-'', and never a case variant of an existing area'); END;
+CREATE TRIGGER legacy_summaries_no_update BEFORE UPDATE ON legacy_summaries
+  BEGIN SELECT RAISE(ABORT, 'legacy summaries are never edited'); END;
+CREATE TRIGGER legacy_summaries_no_delete BEFORE DELETE ON legacy_summaries
+  BEGIN SELECT RAISE(ABORT, 'legacy summaries are never deleted'); END;
+CREATE TRIGGER entries_well_formed BEFORE INSERT ON entries
+  WHEN trim(NEW.description) = '' OR date(NEW.date) IS NOT NEW.date
+  BEGIN SELECT RAISE(ABORT, 'an entry needs a non-blank description and a real date'); END;
+CREATE TRIGGER concerns_well_formed BEFORE INSERT ON concerns
+  WHEN trim(NEW.concern) = '' OR date(NEW.opened) IS NOT NEW.opened
+  BEGIN SELECT RAISE(ABORT, 'a concern needs non-blank text and a real opened date'); END;
+CREATE TRIGGER concerns_resolution_well_formed BEFORE UPDATE ON concerns
+  WHEN NEW.resolved IS NOT NULL AND (date(NEW.resolved) IS NOT NEW.resolved OR trim(NEW.resolution) = '')
+  BEGIN SELECT RAISE(ABORT, 'a resolution needs a real date and a non-blank reason'); END;
+
+-- v5 guards: every text is one line, and an area name can round-trip through
+-- the brief's comma-separated Areas line and the log's (area) rendering.
+CREATE TRIGGER entries_one_line BEFORE INSERT ON entries
+  WHEN instr(NEW.description, char(10)) > 0 OR instr(NEW.description, char(13)) > 0
+  BEGIN SELECT RAISE(ABORT, 'an entry is one line; no newline in its description'); END;
+CREATE TRIGGER concerns_one_line BEFORE INSERT ON concerns
+  WHEN instr(NEW.concern, char(10)) > 0 OR instr(NEW.concern, char(13)) > 0
+  BEGIN SELECT RAISE(ABORT, 'a concern is one line; no newline in its text'); END;
+CREATE TRIGGER concerns_resolution_one_line BEFORE UPDATE ON concerns
+  WHEN NEW.resolution IS NOT NULL
+    AND (instr(NEW.resolution, char(10)) > 0 OR instr(NEW.resolution, char(13)) > 0)
+  BEGIN SELECT RAISE(ABORT, 'a resolution is one line; no newline in its reason'); END;
+CREATE TRIGGER areas_name_plain BEFORE INSERT ON areas
+  WHEN NEW.name GLOB '*[,;()]*' OR instr(NEW.name, char(10)) > 0 OR instr(NEW.name, char(13)) > 0
+  BEGIN SELECT RAISE(ABORT, 'an area name holds no comma, semicolon, parenthesis or newline; the brief lists areas comma-separated and the log renders them in parentheses'); END;
 
 CREATE VIEW log_lines AS
   SELECT e.serial,
