@@ -75,7 +75,7 @@ prompt_read() {
 # partial checkout would otherwise abort mid-copy and leave a partial upgrade.
 check_templates() {
   local f missing=0
-  for f in CLAUDE.md klawde.md close.md changes-schema.sql; do
+  for f in CLAUDE.md klawde.md close.md changes-schema.sql check-log.sh; do
     if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
       echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
       missing=1
@@ -104,6 +104,14 @@ check_no_symlink() {
     echo "Error: $1 is a symlink (to '$(readlink "$1")'). Nothing was changed." >&2
     echo "Klawde's Claude and Codex contracts have different content and cannot share one file." >&2
     echo "Remove the symlink and re-run; the upgrade writes a real file in its place." >&2
+    exit 1
+  fi
+}
+
+check_distinct_contracts() {
+  if [ "$TARGET_DIR/CLAUDE.md" -ef "$TARGET_DIR/AGENTS.md" ]; then
+    echo "Error: CLAUDE.md and AGENTS.md refer to the same file (symlink or hard link). Nothing was changed." >&2
+    echo "Separate the contracts into distinct files before installing either layout." >&2
     exit 1
   fi
 }
@@ -164,8 +172,13 @@ check_retirement() { if is_klawde_file "$1" "$2"; then check_removal "$1"; fi; }
 retire_file() { # retire_file <path> <fingerprint> <phrase>
   local f="$1" fp="$2" what="$3"
   if is_klawde_file "$f" "$fp"; then
-    maybe_backup "$f"
-    rm -f "$f"
+    # Callers test this function's status, which disables Bash's errexit even
+    # inside maybe_backup. Fatal I/O errors must be checked explicitly.
+    maybe_backup "$f" || exit 1
+    if ! rm -f "$f"; then
+      echo "Error: could not remove $f." >&2
+      exit 1
+    fi
     echo "Removed $what."
     return 0
   elif [ -f "$f" ]; then
@@ -199,6 +212,7 @@ if is_klawde_file "$TARGET_DIR/.claude/commands/init.md" "$FP_INIT" \
   has_claude=1
 fi
 if [ -f "$TARGET_DIR/.claude/changes-schema.sql" ]; then has_claude=1; fi
+if [ -f "$TARGET_DIR/.claude/check-log.sh" ]; then has_claude=1; fi
 if [ -f "$TARGET_DIR/AGENTS.md" ]; then has_codex=1; fi
 # Only klawde's own files count as Codex evidence: .agents/skills is a shared
 # convention, and another tool's skills must not pass for a klawde install.
@@ -210,6 +224,7 @@ if is_klawde_file "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$FP_SKILL_KLAUDE
   codex_artifacts=1
 fi
 if [ -f "$TARGET_DIR/.agents/changes-schema.sql" ]; then codex_artifacts=1; fi
+if [ -f "$TARGET_DIR/.agents/check-log.sh" ]; then codex_artifacts=1; fi
 if [ "$codex_artifacts" -eq 1 ]; then has_codex=1; fi
 DETECTED=""
 if [ "$has_claude" -eq 1 ] && [ "$has_codex" -eq 1 ]; then
@@ -267,6 +282,7 @@ fi
 # no point asking about a file the preflight would refuse to write anyway.
 if [ "$TARGET" != "codex" ]; then check_no_symlink "$TARGET_DIR/CLAUDE.md"; fi
 if [ "$TARGET" != "claude" ]; then check_no_symlink "$TARGET_DIR/AGENTS.md"; fi
+check_distinct_contracts
 
 # An AGENTS.md with no .agents/ klawde artifacts behind it may belong to
 # another tool entirely; overwriting it needs explicit confirmation, and no
@@ -296,6 +312,10 @@ fi
 changes="$TARGET_DIR/CHANGES.md"
 db="$TARGET_DIR/changes.db"
 schema="$SCRIPT_DIR/template/changes-schema.sql"
+# The preflight's one comparison of an existing changes.db against the shipped
+# schema, reused below: nothing writes to the log between there and the schema
+# upgrade, and a log the migration creates is fresh from this same schema.
+DB_DRIFT=""
 
 # The area names a legacy CHANGES.md and the brief's Areas line carry, one per
 # line, sorted, cleaned of markdown and whitespace: the preflight refuses
@@ -317,24 +337,18 @@ legacy_areas() {
     | grep -v '^$' | grep -vx -- '-' | sort -u || true
 }
 
-# The triggers and views the shipped schema defines that a database lacks, one
-# name per line. Empty for a whole database of the current version.
-db_missing() { # db_missing <db>
-  local kind name
-  for kind in TRIGGER VIEW; do
-    sed -n "s/^CREATE $kind \([a-z_]*\) .*/\1/p" "$schema" | while IFS= read -r name; do
-      if [ "$(sqlite3 -readonly "$1" "SELECT count(*) FROM sqlite_master WHERE name='$name';")" = "0" ]; then
-        echo "$name"
-      fi
-    done
-  done
+# One line per difference against the shipped schema, as object|name|status,
+# status being missing, changed or unexpected. The checker builds its reference
+# in a temporary database and never writes the project log.
+db_drift() {
+  bash "$SCRIPT_DIR/template/check-log.sh" --objects "$1" "$schema"
 }
 
 # Refuse symlinked, unwritable and unremovable destinations before any write.
 if [ "$TARGET" != "codex" ]; then
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
               "$TARGET_DIR/.claude/commands/close.md" \
-              "$TARGET_DIR/.claude/changes-schema.sql"; do
+              "$TARGET_DIR/.claude/changes-schema.sql" "$TARGET_DIR/.claude/check-log.sh"; do
     check_dest "$path"
   done
   check_retirement "$TARGET_DIR/.claude/commands/init.md" "$FP_INIT"
@@ -344,7 +358,7 @@ fi
 if [ "$TARGET" != "claude" ]; then
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
               "$TARGET_DIR/.agents/skills/close/SKILL.md" \
-              "$TARGET_DIR/.agents/changes-schema.sql"; do
+              "$TARGET_DIR/.agents/changes-schema.sql" "$TARGET_DIR/.agents/check-log.sh"; do
     check_dest "$path"
   done
   check_retirement "$TARGET_DIR/.agents/skills/klaude/SKILL.md" "$FP_SKILL_KLAUDE"
@@ -366,19 +380,28 @@ elif [ -f "$db" ]; then
     bad_dest "changes.db is missing a table its schema version v$uv should have; recover the file from git before upgrading."
   elif [ "$uv" -gt "$SCHEMA_MAX" ]; then
     bad_dest "changes.db schema is v$uv, newer than this checkout supports (v$SCHEMA_MAX); run 'git pull' in $SCRIPT_DIR and retry."
-  elif [ "$uv" -lt "$SCHEMA_MAX" ]; then
-    # The schema upgrade below writes it in place.
-    check_dest "$db"
-  elif [ -n "$(db_missing "$db")" ]; then
-    # Current version, but a trigger or view has gone missing: the repair
-    # below writes it back.
-    check_dest "$db"
+  else
+    # Safe to compare now: the branches above have established a readable log.
+    # A checker that cannot run is reported, never a silent errexit abort.
+    DB_DRIFT="$(db_drift "$db")" \
+      || bad_dest "changes.db could not be compared against the shipped schema."
+    if [ "$uv" -lt "$SCHEMA_MAX" ] || [ -n "$DB_DRIFT" ]; then
+      # A schema upgrade, or a repair of a missing or changed definition,
+      # writes the database in place.
+      check_dest "$db"
+    fi
   fi
 elif [ -f "$changes" ]; then
   # The migration rewrites CHANGES.md in place (normalization), creates the
   # database, and renames CHANGES.md (same directory).
   check_dest "$changes"
   check_dest "$db"
+  # Never overwrite an earlier archive, including a symlink or a directory.
+  if [ -e "$changes.migrated" ] || [ -L "$changes.migrated" ]; then
+    bad_dest "$changes.migrated already exists; move it aside before migrating."
+  else
+    check_dest "$changes.migrated"
+  fi
   if [ -f "$TARGET_DIR/.gitignore" ]; then check_dest "$TARGET_DIR/.gitignore"; fi
   # Serials must be unique. A repeat would abort the import only after the
   # harness files were overwritten, so catch it before anything is written.
@@ -394,6 +417,27 @@ elif [ -f "$changes" ]; then
     bad_dest "CHANGES.md or the brief's Areas line carries areas that differ only by case (${case_dups%; }); unify the spelling in both files and re-run."
   fi
 fi
+# Two differences are refused before any harness file is written, because
+# nothing below can put either right. A missing or changed table cannot be
+# repaired by replacing its definition: that would risk its rows, and only git
+# still holds them. A trigger the shipped schema does not define is not inert
+# either -- a BEFORE INSERT trigger raising IGNORE makes every INSERT succeed
+# and record nothing -- and removing someone's trigger is not this script's
+# call. An unexpected table or view cannot weaken the log and is left alone.
+# Pre-v3 logs legitimately lack concerns, which their version migration creates.
+if [ "$PREFLIGHT_BAD" -eq 0 ] && [ -f "$db" ] && [ -n "$DB_DRIFT" ]; then
+  while IFS='|' read -r kind name status; do
+    if [ "$kind" = "table" ] && [ "$status" != "unexpected" ]; then
+      if [ "$name" = "concerns" ] && [ "$uv" -lt 3 ] \
+        && [ "$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE name='concerns';")" = "0" ]; then
+        continue
+      fi
+      bad_dest "changes.db has a missing or changed $name table; recover the database before upgrading."
+    elif [ "$kind" = "trigger" ] && [ "$status" = "unexpected" ]; then
+      bad_dest "changes.db carries a trigger the shipped schema does not define ($name); remove it, or recover the database from git, before upgrading."
+    fi
+  done <<< "$DB_DRIFT"
+fi
 gate_preflight
 
 echo ""
@@ -407,7 +451,10 @@ maybe_backup() {
     local backup="$path.bak.$(date +%Y%m%d-%H%M%S)" n=0
     # Two backups of one file within a second must not overwrite each other.
     while [ -e "$backup" ]; do n=$((n + 1)); backup="$path.bak.$(date +%Y%m%d-%H%M%S).$n"; done
-    cp "$path" "$backup"
+    if ! cp "$path" "$backup"; then
+      echo "Error: could not back up $path; the original was not removed." >&2
+      return 1
+    fi
     echo "Backed up $(basename "$path") to $(basename "$backup")."
   fi
 }
@@ -418,6 +465,7 @@ rewrite_codex() {
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
+      -e 's#\.claude/check-log\.sh#.agents/check-log.sh#g' \
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's|^# /klawde: |# $klawde: |' \
@@ -459,12 +507,14 @@ upgrade_claude() {
     cp "$SCRIPT_DIR/template/$cmd" "$dst"
     echo "Overwrote $dst."
   done
-  # The log schema /klawde uses to create changes.db on first run.
-  dst="$TARGET_DIR/.claude/changes-schema.sql"
-  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
-  mkdir -p "$(dirname "$dst")"
-  cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
-  echo "Overwrote $dst."
+  # The schema for first-run initialization and the read-only log checker.
+  for artifact in changes-schema.sql check-log.sh; do
+    dst="$TARGET_DIR/.claude/$artifact"
+    if [ -f "$dst" ]; then maybe_backup "$dst"; fi
+    mkdir -p "$(dirname "$dst")"
+    cp "$SCRIPT_DIR/template/$artifact" "$dst"
+    echo "Overwrote $dst."
+  done
   # Retire the legacy /init command (entry protocol is now /klawde), /klaude
   # (the lean variant is gone) and /compresschanges (the log is never
   # compacted now) — each only when the file is klawde's.
@@ -494,12 +544,14 @@ upgrade_codex() {
     "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, the last 5 changes.db log entries, and the open-concern counts by area (creating BRIEFING.md and changes.db if missing), then confirm readiness at session start."
   upgrade_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
-  # The log schema $klawde uses to create changes.db on first run.
-  dst="$TARGET_DIR/.agents/changes-schema.sql"
-  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
-  mkdir -p "$(dirname "$dst")"
-  cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
-  echo "Overwrote $dst."
+  # The schema for first-run initialization and the read-only log checker.
+  for artifact in changes-schema.sql check-log.sh; do
+    dst="$TARGET_DIR/.agents/$artifact"
+    if [ -f "$dst" ]; then maybe_backup "$dst"; fi
+    mkdir -p "$(dirname "$dst")"
+    cp "$SCRIPT_DIR/template/$artifact" "$dst"
+    echo "Overwrote $dst."
+  done
   # Retire the klaude skill (the lean variant is gone; $klawde is the entry
   # protocol) and the compresschanges skill (the log is never compacted now),
   # each only when the file is klawde's; an emptied skill directory goes too.
@@ -895,6 +947,7 @@ fi
 # v3 -> v4 added the guards on concern ids, area names, legacy summaries, and
 # well-formed text and dates.
 # v4 -> v5 added the one-line guards on text and the plain-name guard on areas.
+# v5 -> v6 closes legacy replacement, nullable-reference and multiline-refs gaps.
 # Every statement is extracted from the shipped schema, so the two cannot drift.
 # ---------------------------------------------------------------------------
 add_trigger_from_schema() {
@@ -910,7 +963,7 @@ add_trigger_from_schema() {
 }
 if [ -f "$db" ]; then
   uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;')"
-  if [ "$uv" -lt "$SCHEMA_MAX" ]; then
+  if [ "$uv" -lt "$SCHEMA_MAX" ] || [ -n "$DB_DRIFT" ]; then
     maybe_backup "$db"
   fi
   if [ "$uv" -lt 2 ]; then
@@ -957,15 +1010,27 @@ if [ -f "$db" ]; then
     echo ""
     echo "Upgraded the changes.db schema to v5 (added the one-line guards on text and the plain-name guard on areas)."
   fi
+  if [ "$uv" -lt 6 ]; then
+    # Replace the changed definition and add both guards in one transaction;
+    # never expose a version bump without its complete set of protections.
+    {
+      echo 'BEGIN;'
+      for trig in concerns_immutable_text legacy_summaries_no_replace entries_refs_one_line; do
+        printf 'DROP TRIGGER IF EXISTS %s;\n' "$trig"
+        sed -n "/^CREATE TRIGGER $trig /,/END;/p" "$schema"
+      done
+      echo 'PRAGMA user_version = 6;'
+      echo 'COMMIT;'
+    } | sqlite3 -bail "$db"
+    echo ""
+    echo "Upgraded the changes.db schema to v6 (protected legacy replacements, nullable concern references, and one-line refs)."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
-# Every present database is checked whole before "Done", and repaired where the
-# shipped schema can: a trigger or view that has gone missing is recreated
-# (every statement carries IF NOT EXISTS, so this is idempotent and is what
-# /close points the user at), a missing table is reported and the run fails,
-# because only git still holds the rows it had. The file is the project's
-# memory and is committed to git; it must never pass through here damaged.
+# Check every present database before "Done". Restore missing or changed
+# triggers/views transactionally, then verify definitions as well as integrity.
+# Table damage is refused in preflight: rebuilding a table would risk its rows.
 # ---------------------------------------------------------------------------
 if [ -f "$db" ]; then
   for name in $(sed -n 's/^CREATE TABLE \([a-z_]*\) .*/\1/p' "$schema"); do
@@ -974,27 +1039,37 @@ if [ -f "$db" ]; then
       exit 1
     fi
   done
-  restored=""
-  for name in $(db_missing "$db"); do
-    if sed -n "/^CREATE TRIGGER $name /,/END;/p" "$schema" | grep -q .; then
-      add_trigger_from_schema "$name"
-    else
-      sed -n "/^CREATE VIEW $name /,/;$/p" "$schema" \
-        | sed '1s/^CREATE VIEW /CREATE VIEW IF NOT EXISTS /' | sqlite3 -bail "$db"
-    fi
-    restored="$restored $name"
-  done
-  ic="$(sqlite3 -readonly "$db" 'PRAGMA integrity_check;')"
-  have_trig="$(sqlite3 -readonly "$db" "SELECT count(*) FROM sqlite_master WHERE type='trigger';")"
-  want_trig="$(grep -c '^CREATE TRIGGER' "$schema")"
-  if [ "$ic" != "ok" ] || [ "$have_trig" != "$want_trig" ]; then
-    echo "Error: changes.db failed its check (integrity: $ic; triggers: $have_trig of $want_trig). Recover the file from git." >&2
-    exit 1
+  # Recomputed rather than reused: the version migrations above changed the
+  # database. Only what the shipped schema defines is rewritten -- selected by
+  # what each difference is, never by what it is not, so a status this script
+  # does not know stops the run instead of reaching a DROP.
+  drift="$(db_drift "$db")"
+  repairable="$(printf '%s\n' "$drift" \
+    | awk -F'|' 'NF == 3 && $1 != "table" && ($3 == "missing" || $3 == "changed")')"
+  restored="$(printf '%s\n' "$repairable" | awk -F'|' '$3 == "missing" { printf "%s ", $2 }')"
+  if [ -n "$repairable" ]; then
+    {
+      echo 'BEGIN;'
+      while IFS='|' read -r kind name status; do
+        case "$kind" in
+          trigger)
+            printf 'DROP TRIGGER IF EXISTS %s;\n' "$name"
+            sed -n "/^CREATE TRIGGER $name /,/END;/p" "$schema" ;;
+          view)
+            printf 'DROP VIEW IF EXISTS %s;\n' "$name"
+            sed -n "/^CREATE VIEW $name /,/;$/p" "$schema" ;;
+          *) echo "Error: cannot safely repair $kind $name ($status)." >&2; exit 1 ;;
+        esac
+      done <<< "$repairable"
+      echo 'COMMIT;'
+    } | sqlite3 -bail "$db"
   fi
+  bash "$SCRIPT_DIR/template/check-log.sh" "$db" "$schema"
   if [ -n "$restored" ]; then
-    echo "changes.db checked: integrity ok, $have_trig triggers; restored missing:${restored}."
-  else
-    echo "changes.db checked: integrity ok, $have_trig triggers."
+    echo "restored missing: ${restored% }."
+  fi
+  if [ -n "$repairable" ]; then
+    echo "Reconciled trigger/view definitions with the shipped schema."
   fi
 fi
 

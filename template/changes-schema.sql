@@ -1,4 +1,4 @@
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 CREATE TABLE areas (
   name TEXT PRIMARY KEY CHECK (name <> '')
@@ -73,7 +73,7 @@ CREATE TRIGGER concerns_no_delete BEFORE DELETE ON concerns
 CREATE TRIGGER concerns_immutable_text BEFORE UPDATE ON concerns
   WHEN NEW.id <> OLD.id OR NEW.opened <> OLD.opened OR NEW.area <> OLD.area
     OR NEW.concern <> OLD.concern
-    OR COALESCE(NEW.ref_serial, -1) <> COALESCE(OLD.ref_serial, -1)
+    OR NEW.ref_serial IS NOT OLD.ref_serial
   BEGIN SELECT RAISE(ABORT, 'a concern''s text is immutable; only its resolution may be set'); END;
 CREATE TRIGGER concerns_resolve_once BEFORE UPDATE ON concerns
   WHEN OLD.resolved IS NOT NULL
@@ -132,6 +132,16 @@ CREATE TRIGGER concerns_resolution_one_line BEFORE UPDATE ON concerns
 CREATE TRIGGER areas_name_plain BEFORE INSERT ON areas
   WHEN NEW.name GLOB '*[,;()]*' OR instr(NEW.name, char(10)) > 0 OR instr(NEW.name, char(13)) > 0
   BEGIN SELECT RAISE(ABORT, 'an area name holds no comma, semicolon, parenthesis or newline; the brief lists areas comma-separated and the log renders them in parentheses'); END;
+
+-- v6 closes replacement and nullable-reference loopholes, and keeps refs from
+-- adding apparent entries to the rendered log. concerns_immutable_text above
+-- uses IS NOT so NULL cannot be changed to a sentinel value such as -1.
+CREATE TRIGGER legacy_summaries_no_replace BEFORE INSERT ON legacy_summaries
+  WHEN EXISTS (SELECT 1 FROM legacy_summaries WHERE rowid = NEW.rowid)
+  BEGIN SELECT RAISE(ABORT, 'legacy summaries are never replaced'); END;
+CREATE TRIGGER entries_refs_one_line BEFORE INSERT ON entries
+  WHEN instr(NEW.refs, char(10)) > 0 OR instr(NEW.refs, char(13)) > 0
+  BEGIN SELECT RAISE(ABORT, 'entry refs are one line; no newline in references'); END;
 
 CREATE VIEW log_lines AS
   SELECT e.serial,

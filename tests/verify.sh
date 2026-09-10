@@ -34,8 +34,12 @@ mkfx() { # mkfx <name> -> creates a stale claude install fixture
 # A faithful changes.db of an earlier schema version, built by removing from a
 # fresh install exactly what each later version added. Dropping the concerns
 # table drops its own triggers with it.
-mk_old_db() { # mk_old_db <path> <version 1|2|3|4>
+mk_old_db() { # mk_old_db <path> <version 1|2|3|4|5>
   sqlite3 "$1" < "$KLAWDE/template/changes-schema.sql"
+  sqlite3 "$1" 'DROP TRIGGER legacy_summaries_no_replace; DROP TRIGGER entries_refs_one_line; DROP TRIGGER concerns_immutable_text; PRAGMA user_version = 5;'
+  sed -n '/^CREATE TRIGGER concerns_immutable_text /,/END;/p' "$KLAWDE/template/changes-schema.sql" \
+    | sed 's/NEW.ref_serial IS NOT OLD.ref_serial/COALESCE(NEW.ref_serial, -1) <> COALESCE(OLD.ref_serial, -1)/' | sqlite3 "$1"
+  if [ "$2" -eq 5 ]; then return; fi
   sqlite3 "$1" 'DROP TRIGGER entries_one_line; DROP TRIGGER concerns_one_line; DROP TRIGGER concerns_resolution_one_line; DROP TRIGGER areas_name_plain; PRAGMA user_version = 4;'
   if [ "$2" -le 3 ]; then sqlite3 "$1" 'DROP TRIGGER concerns_no_backfill; DROP TRIGGER concerns_well_formed; DROP TRIGGER concerns_resolution_well_formed; DROP TRIGGER areas_name_clean; DROP TRIGGER legacy_summaries_no_update; DROP TRIGGER legacy_summaries_no_delete; DROP TRIGGER entries_well_formed; PRAGMA user_version = 3;'; fi
   if [ "$2" -le 2 ]; then sqlite3 "$1" 'DROP VIEW concern_lines; DROP TABLE concerns; DROP TRIGGER entries_no_replace; PRAGMA user_version = 2;'; fi
@@ -334,8 +338,8 @@ check "S8 exit nonzero, CLAUDE.md untouched" bash -c "test $rc -ne 0 && grep -q 
 d="$(mkfx s8b)"
 mk_old_db "$d/changes.db" 1
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
-check "S8b v1 db upgraded to v5 in place" \
-  bash -c "test $rc -eq 0 && test \"\$(sqlite3 -readonly '$d/changes.db' 'PRAGMA user_version;')\" = 5"
+check "S8b v1 db upgraded to v6 in place" \
+  bash -c "test $rc -eq 0 && test \"\$(sqlite3 -readonly '$d/changes.db' 'PRAGMA user_version;')\" = 6"
 check "S8b v1 path also gains the entries no-replace guard" \
   test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='entries_no_replace';")" = "1"
 d="$(mkfx s8c)"
@@ -477,7 +481,7 @@ d1="$BASE/s16a"; d2="$BASE/s16b"; mkdir -p "$d1" "$d2"
 (cd "$d1" && "$KLAWDE/setup.sh" --codex >/dev/null 2>&1)
 (cd "$d2" && "$KLAWDE/upgrade.sh" --codex --no-backup < /dev/null >/dev/null 2>&1)
 same=1
-for f in AGENTS.md .agents/changes-schema.sql .agents/skills/klawde/SKILL.md \
+for f in AGENTS.md .agents/changes-schema.sql .agents/check-log.sh .agents/skills/klawde/SKILL.md \
          .agents/skills/close/SKILL.md; do
   cmp -s "$d1/$f" "$d2/$f" || same=0
 done
@@ -488,7 +492,7 @@ echo "=== S21: the Codex rewrite leaves no Claude-only reference behind ==="
 # paths and the bare schema path; anything else survives verbatim into files
 # where it is wrong. Every template must therefore stay inside those forms.
 left=""
-for f in "$d1/AGENTS.md" "$d1"/.agents/skills/*/SKILL.md "$d1/.agents/changes-schema.sql"; do
+for f in "$d1/AGENTS.md" "$d1"/.agents/skills/*/SKILL.md "$d1/.agents/changes-schema.sql" "$d1/.agents/check-log.sh"; do
   # The rewritten skill paths contain /klawde/ and /close/ legitimately; drop
   # them before looking for anything the rewrite missed.
   hits="$(sed 's#\.agents/skills/[a-z]*/SKILL\.md##g' "$f" | grep -n -E '/klawde|/close|\.claude/|CLAUDE\.md' || true)"
@@ -508,7 +512,7 @@ check "S17 newer-schema error shown" grepq 'newer than this checkout supports' "
 check "S17 CLAUDE.md untouched" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
 
 echo "=== S18: the brief shape measurement shipped in the commands ==="
-# /klawde step 8 and /close step 6 carry the same awk one-liner; it must be one
+# /klawde step 8 and /close step 7 carry the same awk one-liner; it must be one
 # command, and it must count what the protocols say it counts.
 d="$BASE/s18"; mkdir -p "$d"
 grep '^awk ' "$KLAWDE/template/klawde.md" > "$d/klawde.cmd"
@@ -629,7 +633,7 @@ check "S19 v2 fixture carries 9 triggers" test "$(tc "$d/changes.db")" = "9"
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s19.out"
 check "S19 exit 0" test "$rc" -eq 0
-check "S19 upgraded to v5" test "$(sqlite3 -readonly "$d/changes.db" 'PRAGMA user_version;')" = "5"
+check "S19 upgraded to v6" test "$(sqlite3 -readonly "$d/changes.db" 'PRAGMA user_version;')" = "6"
 check "S19 v3 message shown" grepq 'Upgraded the changes.db schema to v3' "$BASE/s19.out"
 check "S19 v4 message shown" grepq 'Upgraded the changes.db schema to v4' "$BASE/s19.out"
 check "S19 v5 message shown" grepq 'Upgraded the changes.db schema to v5' "$BASE/s19.out"
@@ -672,16 +676,16 @@ d3="$(mkfx s19v3)"; mk_old_db "$d3/changes.db" 3
 check "S19 v3 fixture carries 17 triggers" test "$(tc "$d3/changes.db")" = "17"
 out="$(cd "$d3" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s19v3.out"
-check "S19 v3 upgrade exit 0, only the v4 and v5 steps run" \
-  bash -c "test $rc -eq 0 && grep -q 'schema to v4' '$BASE/s19v3.out' && grep -q 'schema to v5' '$BASE/s19v3.out' && ! grep -q 'schema to v3' '$BASE/s19v3.out'"
+check "S19 v3 upgrade exit 0, only the v4, v5 and v6 steps run" \
+  bash -c "test $rc -eq 0 && grep -q 'schema to v4' '$BASE/s19v3.out' && grep -q 'schema to v5' '$BASE/s19v3.out' && grep -q 'schema to v6' '$BASE/s19v3.out' && ! grep -q 'schema to v3' '$BASE/s19v3.out'"
 check "S19 v3 upgrade yields a schema identical to a fresh install" \
   bash -c "test \"\$(sqlite3 -readonly '$d3/changes.db' \"$q_all\")\" = \"\$(sqlite3 -readonly '$fresh' \"$q_all\")\""
 d4="$(mkfx s19v4)"; mk_old_db "$d4/changes.db" 4
 check "S19 v4 fixture carries 24 triggers" test "$(tc "$d4/changes.db")" = "24"
 out="$(cd "$d4" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s19v4.out"
-check "S19 v4 upgrade exit 0, only the v5 step runs" \
-  bash -c "test $rc -eq 0 && grep -q 'schema to v5' '$BASE/s19v4.out' && ! grep -q 'schema to v4' '$BASE/s19v4.out'"
+check "S19 v4 upgrade exit 0, only the v5 and v6 steps run" \
+  bash -c "test $rc -eq 0 && grep -q 'schema to v5' '$BASE/s19v4.out' && grep -q 'schema to v6' '$BASE/s19v4.out' && ! grep -q 'schema to v4' '$BASE/s19v4.out'"
 check "S19 v4 upgrade yields a schema identical to a fresh install" \
   bash -c "test \"\$(sqlite3 -readonly '$d4/changes.db' \"$q_all\")\" = \"\$(sqlite3 -readonly '$fresh' \"$q_all\")\""
 check "S19 a fresh install refuses an unknown entry area" \
@@ -702,13 +706,29 @@ s20_run() { # s20_run <template> <seed 0|1>
     i=1; while [ "$i" -le 60 ]; do sql="$sql INSERT INTO entries (type,area,description) VALUES ('note','-','filler $i');"; i=$((i+1)); done
     sqlite3 "$w/changes.db" "$sql"
   fi
-  grep -E '^[[:space:]]*sqlite3 ' "$KLAWDE/template/$tpl" | sed 's/^[[:space:]]*//' > "$w/stmts"
-  while IFS= read -r line; do
-    n=$((n+1))
-    if ! (cd "$w" && eval "$line" >/dev/null 2>"$w/err"); then
-      failed=1; echo "  $tpl statement $n failed: $line"; cat "$w/err"
+  cp "$KLAWDE/template/check-log.sh" "$w/.claude/check-log.sh"
+  # Extract complete CLI commands, including quoted heredocs. Running only a
+  # heredoc opener would falsely pass without executing any of its SQL.
+  awk -v out="$w" '
+    /^[[:space:]]*(sqlite3 |bash \.claude\/check-log\.sh)/ {
+      sub(/^[[:space:]]*/, "")
+      file = out "/stmt-" ++n ".sh"
+      print > file
+      if ($0 ~ /<</) body = 1
+      else close(file)
+      next
+    }
+    body { print > file; if ($0 == "KLAWDE_SQL") { body = 0; close(file) } }
+    END { print n + 0 > (out "/count"); if (body) exit 1 }
+  ' "$KLAWDE/template/$tpl" || failed=1
+  n="$(cat "$w/count")"
+  i=1
+  while [ "$i" -le "$n" ]; do
+    if ! (cd "$w" && /bin/bash -e "stmt-$i.sh" > /dev/null 2> "$w/err"); then
+      failed=1; echo "  $tpl command $i failed:"; cat "$w/err"
     fi
-  done < "$w/stmts"
+    i=$((i + 1))
+  done
   check "S20 $tpl carries statements to run" test "$n" -gt 0
   check "S20 $tpl: all $n statements ran clean" test "$failed" -eq 0
 }
@@ -725,11 +745,13 @@ check "S22 README trigger count matches the schema ($have)" test "$readme_t" = "
 close_obj="$(grep -o 'the object count `[0-9]*`' "$KLAWDE/template/close.md" | head -1 | tr -dc '0-9')"
 schema_obj="$(grep -cE '^CREATE (TABLE|VIEW) ' "$KLAWDE/template/changes-schema.sql")"
 check "S22 close.md object count matches the schema's tables and views ($schema_obj)" test "$close_obj" = "$schema_obj"
+close_v="$(grep -o 'integrity ok, schema v[0-9]*' "$KLAWDE/template/close.md" | head -1 | tr -dc '0-9')"
+check "S22 close.md closing block names the shipped schema version (v$schema_v)" test "$close_v" = "$schema_v"
 
 echo "=== S24: a present changes.db is checked and repaired whatever its version ==="
 d="$(mkfx s24)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
 sqlite3 "$d/changes.db" 'DROP TRIGGER entries_no_update; DROP TRIGGER entries_no_delete; DROP TRIGGER links_no_update; DROP TRIGGER links_no_delete; DROP TRIGGER areas_no_update; DROP TRIGGER areas_no_delete; DROP TRIGGER entries_no_replace; DROP VIEW concern_lines;'
-check "S24 damaged current-version db looks like a v3 by trigger count" test "$(tc "$d/changes.db")" = "21"
+check "S24 damaged current-version db has lost seven triggers" test "$(tc "$d/changes.db")" = "23"
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
 echo "$out" > "$BASE/s24.out"
 check "S24 exit 0" test "$rc" -eq 0
@@ -788,6 +810,211 @@ check "S23 a new clean area still accepted" allowed "INSERT INTO areas VALUES ('
 check "S23 legacy summary edit refused" refused "UPDATE legacy_summaries SET description = 'x';"
 check "S23 legacy summary delete refused" refused "DELETE FROM legacy_summaries;"
 check "S23 a well-formed resolve still succeeds" allowed "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'settled' WHERE id = 1;"
+
+echo "=== S27: retirement stops when a backup or removal fails ==="
+failbin="$BASE/failbin"; mkdir -p "$failbin"
+cat > "$failbin/cp" <<'SH'
+#!/bin/bash
+case "$1" in */klaude.md|*/klaude/SKILL.md) echo 'injected backup failure' >&2; exit 1 ;; esac
+exec /bin/cp "$@"
+SH
+chmod +x "$failbin/cp"
+for layout in claude codex; do
+  d="$(mkfx "s27-$layout")"
+  legacy="$d/.claude/commands/klaude.md"
+  if [ "$layout" = codex ]; then
+    legacy="$d/.agents/skills/klaude/SKILL.md"
+    mkdir -p "$(dirname "$legacy")"; printf '%s\n' 'name: klaude' 'CUSTOM LEGACY' > "$legacy"
+  fi
+  out="$(cd "$d" && PATH="$failbin:$PATH" "$KLAWDE/upgrade.sh" "--$layout" --backup 2>&1)"; rc=$?
+  printf '%s\n' "$out" > "$BASE/s27-$layout.out"
+  check "S27 $layout backup failure aborts" test "$rc" -ne 0
+  check "S27 $layout original survives" test -f "$legacy"
+  check "S27 $layout no false backup success" ngrepq 'Backed up \(klaude.md\|SKILL.md\)' "$BASE/s27-$layout.out"
+  check "S27 $layout failure is reported" grepq 'could not back up' "$BASE/s27-$layout.out"
+done
+cat > "$failbin/rm" <<'SH'
+#!/bin/bash
+case "$*" in *'/klaude.md'*) echo 'injected removal failure' >&2; exit 1 ;; esac
+exec /bin/rm "$@"
+SH
+chmod +x "$failbin/rm"
+d="$(mkfx s27-remove)"
+out="$(cd "$d" && PATH="$failbin:$PATH" "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S27 failed removal aborts" test "$rc" -ne 0
+check "S27 failed removal retains original" test -f "$d/.claude/commands/klaude.md"
+
+echo "=== S28: existing migration archives are never overwritten ==="
+for kind in file directory symlink dangling; do
+  d="$(mkfx "s28-$kind")"
+  printf '%s\n' '2026-09-01 001 [note] (-) Original history' > "$d/CHANGES.md"
+  printf '%s\n' 'UNRELATED CONTENT' > "$d/other.txt"
+  case "$kind" in
+    file) echo 'EARLIER ARCHIVE' > "$d/CHANGES.md.migrated" ;;
+    directory) mkdir "$d/CHANGES.md.migrated" ;;
+    symlink) ln -s other.txt "$d/CHANGES.md.migrated" ;;
+    dangling) ln -s missing.txt "$d/CHANGES.md.migrated" ;;
+  esac
+  out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+  check "S28 $kind archive refused before writes" test "$rc" -ne 0
+  check "S28 $kind original log survives" test -f "$d/CHANGES.md"
+  check "S28 $kind contract unchanged" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
+  check "S28 $kind unrelated file unchanged" grepq '^UNRELATED CONTENT$' "$d/other.txt"
+  check "S28 $kind database not created" test ! -e "$d/changes.db"
+done
+
+echo "=== S29: contract hard links are refused even for a single layout ==="
+for script in setup upgrade; do
+  for target in claude codex both; do
+    d="$(mkfx "s29-$script-$target")"
+    ln "$d/CLAUDE.md" "$d/AGENTS.md"
+    flags=""; if [ "$script" = upgrade ]; then flags="--no-backup"; fi
+    out="$(cd "$d" && "$KLAWDE/$script.sh" "--$target" $flags < /dev/null 2>&1)"; rc=$?
+    check "S29 $script $target refuses shared inode" test "$rc" -ne 0
+    check "S29 $script $target contract unchanged" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
+  done
+done
+
+echo "=== S30: definition drift is detected readonly and repaired with backup ==="
+d="$(mkfx s30)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" "INSERT INTO entries (type,description) VALUES ('note','keep me'); DROP TRIGGER entries_no_update; CREATE TRIGGER entries_no_update BEFORE UPDATE ON entries BEGIN SELECT 1; END; DROP VIEW log_lines; CREATE VIEW log_lines AS SELECT serial, 'wrong' AS line FROM entries;"
+before="$(cksum < "$d/changes.db")"
+out="$(bash "$KLAWDE/template/check-log.sh" "$d/changes.db" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s30-check.out"
+check "S30 checker rejects same-name no-op trigger" test "$rc" -ne 0
+check "S30 trigger drift named with its status" grepq 'trigger|entries_no_update|changed' "$BASE/s30-check.out"
+check "S30 view drift named with its status" grepq 'view|log_lines|changed' "$BASE/s30-check.out"
+check "S30 checker did not alter database" test "$before" = "$(cksum < "$d/changes.db")"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --backup 2>&1)"; rc=$?
+check "S30 upgrade repairs definitions" test "$rc" -eq 0
+check "S30 repaired database passes checker" bash "$KLAWDE/template/check-log.sh" "$d/changes.db"
+check "S30 history unchanged" test "$(sqlite3 "$d/changes.db" 'SELECT description FROM entries;')" = 'keep me'
+check "S30 history protected again" bash -c "! sqlite3 '$d/changes.db' \"UPDATE entries SET description='rewritten';\" 2>/dev/null"
+backed=0; for backup in "$d"/changes.db.bak.*; do if [ -f "$backup" ]; then backed=1; fi; done
+check "S30 current-version repair backs up database" test "$backed" -eq 1
+# Both the checker and installer must support apostrophes in paths.
+d="$(mkfx "s30-quoted'path")"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+check "S30 quoted path verifies" bash "$KLAWDE/template/check-log.sh" "$d/changes.db"
+# Changed table definitions cannot be fixed without risking records.
+sqlite3 "$d/changes.db" 'ALTER TABLE entries ADD COLUMN unwanted TEXT;'
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S30 altered table aborts upgrade" test "$rc" -ne 0
+check "S30 altered table leaves contract unchanged" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
+
+echo "=== S31: v6 guards hold fresh and after a v5 upgrade ==="
+for origin in fresh v5; do
+  d="$(mkfx "s31-$origin")"; g="$d/changes.db"
+  if [ "$origin" = v5 ]; then
+    mk_old_db "$g" 5
+    check "S31 faithful v5 carries 28 triggers" test "$(tc "$g")" = 28
+    out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+    check "S31 v5 upgrade succeeds" test "$rc" -eq 0
+  else
+    sqlite3 "$g" < "$KLAWDE/template/changes-schema.sql"
+  fi
+  sqlite3 "$g" "INSERT INTO legacy_summaries VALUES ('2025-01','-','original'); INSERT INTO concerns (concern) VALUES ('observed; consequence; criterion');"
+  check "S31 $origin legacy replacement refused" refused "INSERT OR REPLACE INTO legacy_summaries (rowid,month,area,description) VALUES (1,'2025-01','-','rewritten');"
+  check "S31 $origin legacy append still allowed" allowed "INSERT INTO legacy_summaries VALUES ('2025-02','-','another');"
+  check "S31 $origin null reference cannot become -1" refused 'UPDATE concerns SET ref_serial=-1 WHERE id=1;'
+  check "S31 $origin reference remains null" test "$(sqlite3 "$g" 'SELECT ref_serial IS NULL FROM concerns WHERE id=1;')" = 1
+  check "S31 $origin LF refs refused" refused "INSERT INTO entries (type,description,refs) VALUES ('note','ok','commit' || char(10) || 'fake line');"
+  check "S31 $origin CR refs refused" refused "INSERT INTO entries (type,description,refs) VALUES ('note','ok','commit' || char(13) || 'fake line');"
+  check "S31 $origin plain refs allowed" allowed "INSERT INTO entries (type,description,refs) VALUES ('note','ok','abc123');"
+  check "S31 $origin normal resolution allowed" allowed "UPDATE concerns SET resolved=date('now','localtime'), resolution='settled' WHERE id=1;"
+  check "S31 $origin matches current schema" bash "$KLAWDE/template/check-log.sh" "$g"
+done
+
+echo "=== S32: authored SQL preserves literal shell syntax and apostrophes ==="
+d="$(mkfx s32)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" "INSERT INTO areas VALUES ('queue');"
+cat > "$d/payload" <<'TEXT'
+Literal `touch marker-backtick` $(touch marker-dollar) $5 "quotes" and don''t
+TEXT
+# Replace only the example's description inside the actual shipped command.
+awk -v payload="$d/payload" '
+  BEGIN { getline text < payload; close(payload) }
+  { sub(/Retry moved to the gateway; per-client retry double-billed the API/, text); print }
+' "$BASE/s20-CLAUDE.md/stmt-1.sh" > "$d/write.sh"
+out="$(cd "$d" && /bin/bash write.sh 2>&1)"; rc=$?
+check "S32 literal SQL write succeeds" test "$rc" -eq 0
+check "S32 backtick command never ran" test ! -e "$d/marker-backtick"
+check "S32 dollar substitution never ran" test ! -e "$d/marker-dollar"
+expected="$(sed "s/''/'/g" "$d/payload")"
+check "S32 stored text is exact" test "$(sqlite3 "$d/changes.db" 'SELECT description FROM entries;')" = "$expected"
+
+echo "=== S33: the installed checker alone identifies the layout ==="
+for layout in claude codex; do
+  d="$BASE/s33-$layout"; mkdir -p "$d"
+  dir=.claude; if [ "$layout" = codex ]; then dir=.agents; fi
+  mkdir -p "$d/$dir"; cp "$KLAWDE/template/check-log.sh" "$d/$dir/check-log.sh"
+  out="$(cd "$d" && printf '\n' | "$KLAWDE/upgrade.sh" --no-backup 2>&1)"; rc=$?
+  printf '%s\n' "$out" > "$BASE/s33-$layout.out"
+  check "S33 $layout detected from checker" grepq "Enter for detected: $layout" "$BASE/s33-$layout.out"
+  check "S33 $layout upgrade completes" test "$rc" -eq 0
+done
+
+echo "=== S34: objects the shipped schema does not define ==="
+# An extra trigger is not inert: a BEFORE INSERT trigger raising IGNORE makes
+# every INSERT succeed and record nothing, so a session would report entries it
+# never wrote. Refused before any file is written, and sent to git, not upgrade.
+d="$(mkfx s34trig)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" "CREATE TRIGGER silent_drop BEFORE INSERT ON entries BEGIN SELECT RAISE(IGNORE); END;"
+before="$(cksum < "$d/changes.db")"
+out="$(bash "$KLAWDE/template/check-log.sh" "$d/changes.db" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s34trig.check"
+check "S34 checker rejects a trigger the schema does not define" test "$rc" -ne 0
+check "S34 checker names it with its status" grepq 'trigger|silent_drop|unexpected' "$BASE/s34trig.check"
+check "S34 checker sends it to git, not back to upgrade.sh" grepq 'recover changes.db from git' "$BASE/s34trig.check"
+check "S34 the silencing trigger really does swallow inserts" \
+  bash -c "sqlite3 '$d/changes.db' \"INSERT INTO entries (type,description) VALUES ('note','x');\" && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT count(*) FROM entries;')\" = 0"
+before="$(cksum < "$d/changes.db")"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --backup 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s34trig.upgrade"
+check "S34 upgrade refuses it" test "$rc" -ne 0
+check "S34 refusal comes before any write" grepq 'Nothing was changed' "$BASE/s34trig.upgrade"
+check "S34 contract unchanged" grepq 'OLD CONTRACT' "$d/CLAUDE.md"
+check "S34 database untouched" test "$before" = "$(cksum < "$d/changes.db")"
+backed=0; for backup in "$d"/changes.db.bak.*; do if [ -e "$backup" ]; then backed=1; fi; done
+check "S34 no backup was taken either" test "$backed" -eq 0
+# An extra table or view cannot weaken the log, so it is reported and left
+# alone. Repair selects objects by what each difference is: dropping one the
+# schema does not define would destroy the rows or the definition behind it.
+d="$(mkfx s34extra)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" "CREATE TABLE scratchpad (k TEXT); INSERT INTO scratchpad VALUES ('keep me'); CREATE VIEW my_report AS SELECT 1 AS x;"
+out="$(bash "$KLAWDE/template/check-log.sh" "$d/changes.db" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s34extra.check"
+check "S34 an extra table or view does not fail the check" test "$rc" -eq 0
+check "S34 extras are still reported" grepq 'table|scratchpad|unexpected' "$BASE/s34extra.check"
+sqlite3 "$d/changes.db" 'DROP TRIGGER entries_no_delete;'
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s34extra.upgrade"
+check "S34 upgrade completes alongside extras" test "$rc" -eq 0
+check "S34 extra table survives with its rows" \
+  test "$(sqlite3 -readonly "$d/changes.db" 'SELECT k FROM scratchpad;')" = "keep me"
+check "S34 extra view survives" \
+  test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='my_report';")" = "1"
+check "S34 the genuinely missing trigger was restored" \
+  test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='entries_no_delete';")" = "1"
+check "S34 repaired database still passes the checker" bash "$KLAWDE/template/check-log.sh" "$d/changes.db"
+# A view on its own, with no unexpected table sorting ahead of it: dispatching
+# on the object kind alone would drop it here and report success, so this is the
+# case that actually catches a repair reaching past what the schema ships.
+d="$(mkfx s34view)"; sqlite3 "$d/changes.db" < "$KLAWDE/template/changes-schema.sql"
+sqlite3 "$d/changes.db" "CREATE VIEW my_report AS SELECT serial FROM entries; DROP TRIGGER entries_no_delete;"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S34 upgrade completes with an extra view alone" test "$rc" -eq 0
+check "S34 an extra view is never dropped by the repair" \
+  test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='my_report';")" = "1"
+check "S34 its missing trigger was still restored" \
+  test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='entries_no_delete';")" = "1"
+
+echo "=== S35: every shipped script parses ==="
+# bash -n takes one script; anything after the first is an argument to it, not
+# a second file to check, so each one is verified on its own.
+for f in setup.sh upgrade.sh template/check-log.sh tests/verify.sh; do
+  check "S35 $f parses" /bin/bash -n "$KLAWDE/$f"
+done
+
 
 echo ""
 echo "RESULT: $pass passed, $fail failed"

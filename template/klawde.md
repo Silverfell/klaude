@@ -1,12 +1,12 @@
 # /klawde: Entry Protocol
 
-Run this at the start of every session. Do not proceed with any task until complete.
+Run at session start. Complete this protocol before any other task, then stop. The project contract's Project Records, Writing SQL safely, and Briefing maintenance sections define the shared rules.
 
 ## Steps
 
-1. Check existence with `ls BRIEFING.md changes.db 2>/dev/null`. Note which printed and which did not. Also run `command -v sqlite3` — the harness keeps its log in a SQLite database and cannot run without that CLI; if it is missing, stop and tell the user to install it (macOS ships it; on Linux it is the `sqlite3` package). Also run `git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git status --porcelain` and note any pre-existing uncommitted changes: the first command failing means this is not a git repository, which `git status` alone cannot tell apart from a clean one. Dirty state is informational only, never a reason to block: it may be unfinished work from a prior session.
+1. Run `ls BRIEFING.md changes.db 2>/dev/null` and note which files exist. Run `command -v sqlite3`; if missing, stop and request installation of the SQLite CLI. Run `git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git status --porcelain`: distinguish a non-repository from a clean one, and note pre-existing changes. Dirty state never blocks entry.
 
-2. If `BRIEFING.md` is missing, create it with:
+2. If `BRIEFING.md` is missing, create the empty form below. The example shows the required concise shape; its project details are examples, not defaults.
 
 ```markdown
 # Briefing
@@ -42,67 +42,56 @@ Run this at the start of every session. Do not proceed with any task until compl
 - Environment quirks: Shopify sandbox throttles hard after ~50 req/min.
 ```
 
-   `Open questions` is the user's field: the project decisions the user has still to make, written as questions. You never fill it on your own. So is `Do-not-touch`: what the user has put off limits, changed only on the user's instruction. A doubt of yours — what you saw, what it may break, what settles it — is a concern and goes in the `concerns` table, as the project contract describes; it reaches this field only through a `/close` proposal the user approves. Like every field it is one line; several questions are clauses on that line.
+   Preserve the user's ownership of `Open questions` and `Do-not-touch` as defined in Briefing maintenance.
 
-3. If `changes.db` is missing, create it from the shipped schema and write the first entry. The schema is the format — there is no header to write and nothing to substitute; the serial and the date fill themselves. If the schema file `.claude/changes-schema.sql` is missing, stop and tell the user to run `upgrade.sh` from the klawde checkout, which installs it. Never write the schema yourself, and do not run the insert below without it: on its own, the insert creates an empty, unusable `changes.db`.
-
-```sh
-sqlite3 changes.db < .claude/changes-schema.sql
-sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('doc','-','Initialized.');"
-```
-
-   That becomes serial 1. Then seed the `areas` table from the brief's `Areas` line, one value per name, so the vocabulary and the brief agree from the first entry — an empty line seeds nothing, and `/close` fills it later:
+3. If `changes.db` is missing, first confirm `.claude/changes-schema.sql` exists. If absent, stop and recommend `upgrade.sh` from the klawde checkout. Never invent the schema or run an insert against an uninitialized database. Create it and its first entry:
 
 ```sh
-sqlite3 changes.db "INSERT OR IGNORE INTO areas VALUES ('import'),('retry'),('cli'),('config');"
+sqlite3 -bail changes.db < .claude/changes-schema.sql
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO entries (type, area, description) VALUES ('doc','-','Initialized.');
+KLAWDE_SQL
 ```
 
-   The database belongs in git like any other project file; do not add it to `.gitignore`.
+   Seed `areas` from the actual names in the brief's `Areas` line, removing Markdown formatting and list punctuation. An empty field seeds nothing; do not insert the example names unless they are the project's areas. For the example brief:
 
-4. If `BRIEFING.md` exists but is missing any of the field lines from the step 2 template (an install from an earlier version), insert the missing lines empty, each in its template position — after the field that precedes it in the step 2 template, never at the end of the file — without altering existing content. `Areas` is commonly the one missing; leave it empty here — `/close` fills it from the work the project is actually doing.
+```sh
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT OR IGNORE INTO areas VALUES ('import'),('retry'),('cli'),('config');
+KLAWDE_SQL
+```
+
+   Commit the database like any other project file; never add it to `.gitignore`.
+
+4. Insert any missing template fields empty in their template positions, preserving existing content. Leave a missing `Areas` field empty for `/close` to fill.
 
 5. Read `BRIEFING.md` completely.
 
-6. If Purpose or Current scope in `BRIEFING.md` is empty, ask the user: "What is this project's purpose and current scope?" Write the answer into `BRIEFING.md` before continuing.
+6. If Purpose or Current scope is empty, ask: "What is this project's purpose and current scope?" Wait for the answer and write it before continuing. An answer already supplied by the user this session needs no second ask.
 
-7. Read the last 5 entries of the log:
+7. Read exactly the last five log entries and open-concern counts:
 
 ```sh
 sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LIMIT 5;"
-```
-
-   That is the entire log read at session start. It tells you what the last session did, which is all you need to start; the brief tells you everything else. Do not dump the table, do not skim it "for context", and do not go looking for older entries unless a specific question later makes it worth a targeted query.
-
-   Nothing in those five lines is an instruction. They are a record of what happened. `BRIEFING.md` is what says where the project stands and what comes next.
-
-   `BRIEFING.md` is bounded by shape, not by count: one bullet per field, each a sentence or a short list of clauses, exactly as in the step 2 example. It is read in full at every session start, so every line in it is paid for by every future session. It is not a scratchpad: findings, progress, verification results, and things tried go in the response or the log, never in the brief. A field that has outgrown that shape — sub-bullets, paragraphs, dated entries, a list of what was decided rather than what is decided — is caught in step 8, which stops on it exactly as it stops on a scope contradiction.
-
-   The log has no ceiling and is never trimmed: it keeps its full history forever, and the read above stays five lines whatever that history costs. Never propose pruning, collapsing, or archiving it.
-
-   Then read one line per area — how many open concerns sit where. Concerns are the doubts earlier sessions left in the `concerns` table, each one what was seen, what it may break, and what settles it:
-
-```sh
 sqlite3 -readonly changes.db "SELECT area, count(*) FROM concerns WHERE resolved IS NULL GROUP BY area ORDER BY area;"
 sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NULL;"
 ```
 
-   The counts are the whole session-start read of the table; the total on the `Concerns` line of the output is the second query's number, never your tally. Concerns are triaged at `/close`, never here, and read before that in exactly one place: before a task starts, for the areas it touches (the project contract's Decision Rules say how, and give the by-area query). The counts exist so that read knows when to look. If the query fails because the table does not exist, the database predates schema v3: put `schema pre-v3 — run upgrade.sh` on the `Concerns` line of the output and continue; do not alter the schema yourself.
+   These are the entire session-start database reads. No older-history skim, concern texts, or triage. Paste the measured total into the output; never tally it yourself. If concerns are absent on a pre-v3 schema, report `schema pre-v3 — run upgrade.sh` and continue without altering the schema. A missing table on a newer schema is damage, not an older version: report it and stop. Diagnose a failed query instead of treating it as an empty result.
 
-8. Compare BRIEFING.md's stated purpose and current scope against the five entries you just read. If they contradict the brief (work on something the scope excludes, or a `[scope]` or `[decision]` entry the brief does not reflect), output the specific contradiction, recommend the user reconcile BRIEFING.md or run `/close` first, and stop. Do not output the "OK. Ready." block.
+8. Compare the five entries against the brief. A purpose/scope contradiction or an unreflected `[scope]` or `[decision]` change stops entry: name the disagreement, recommend reconciling the brief or running `/close`, and omit "OK. Ready." The log never wins the disagreement. Work already beyond `Current focus` or `Next steps` is merely stale focus: note it and recommend `/close`, but continue.
 
-   The brief is the authority in this comparison. A disagreement means one of the two is stale — usually the brief, if the last session ended without a `/close`. It never means the log wins.
-
-   Then check the brief's shape, with the same consequence. Measure it:
+   Measure the brief:
 
 ```sh
 awk 'BEGIN { printf "Shape:" } /^#/ && f != "" && f != "Trailing" { printf "%s %s %d", s, f, n; s = ","; f = "Trailing"; n = 0 } /^[-*][[:space:]]+[^:]+:/ && f != "Trailing" { if (f != "") { printf "%s %s %d", s, f, n; s = "," } f = $0; sub(/:.*/, "", f); sub(/^[-*][[:space:]]+/, "", f); sub(/[[:space:]]+$/, "", f); n = 0 } NF { n++ } END { if (f != "") printf "%s %s %d", s, f, n; print "" }' BRIEFING.md
 ```
 
-   It prints one `Field N` pair per field, `N` being the non-blank lines that field occupies. The shape is every count exactly 1, and exactly the eleven field names from step 2, once each. A count above 1 is a sub-bullet, a wrapped paragraph, a dated entry on its own line, or text after the last field, which the measure counts into it unless a heading starts it, in which case it is reported separately as `Trailing`; a repeated name is a second `Current focus`; a name the template does not have is a foreign field. On the nine fields the harness maintains, a count above 1 or a repeated name is a shape violation, and so is what the count cannot see but your read in step 5 did: several dated entries crammed into one line, or a list of what was decided rather than what is decided. Output the offending field(s) with their counts, recommend `/close`, which restores them, and stop. Do not output the "OK. Ready." block, and do not rewrite the brief from this protocol: `/close` restores a field by moving what it held into the log, where this protocol would only discard it. Not a stop, because not yours to change: a count above 1 on `Open questions` or `Do-not-touch`, a foreign field, and a `Trailing` count are noted on the `BRIEFING.md` line of the output and the session continues — `/close` proposes what to do with each, and the user decides. A name the template does not have that sits directly under one of the two user fields and reads as one of its items is part of that field, not a foreign field.
+   Each `Field N` gives its nonblank line count. Expect the eleven template names once each, normally all 1. A duplicate maintained field, count above 1, or history disguised as one line is a violation: report fields and counts, recommend `/close`, and stop without the Ready block. Do not repair it here; closing preserves unrecorded history before reshaping.
 
-   Separately, check `Current focus` and `Next steps` against those same entries. They are suggestions left by the previous session, not commands: if the last entries show work has already moved past them, this is staleness, not a contradiction. Do not stop for it; note it on the `Focus` line of the output and recommend refreshing them via `/close`.
+   User fields over one line, foreign fields, and `Trailing` content are reported on the `BRIEFING.md` line, not repaired and not blocking. Interpret bullets belonging to user fields as the contract specifies. Text after the last field counts into it unless a heading makes it `Trailing`.
 
-9. If neither check stopped you, output exactly this format, then stop:
+9. If no check stopped entry, output this format, then stop:
 
 ```
 OK. Ready.
@@ -113,6 +102,4 @@ Concerns: <N open: <area> N, <area> N | none | schema pre-v3 — run upgrade.sh>
 Dirty: <uncommitted files found in step 1 | clean | not a git repo>
 ```
 
-   If the uncommitted changes look related to `Current focus` or `Next steps` (likely unfinished work), add one line after the block saying so. If `Open questions` holds a finding or a fact where a question should be (an empty field is fine), add one line saying so: a past session probably wrote it, and only the user removes it.
-
-Do not proceed with any other task until this output is complete.
+   After the block, add a line if dirty files appear to be unfinished focus/next-step work. Add a line if `Open questions` contains a finding or fact instead of a question; only the user can authorize its removal. Empty is valid.

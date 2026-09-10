@@ -70,7 +70,7 @@ prompt_read() {
 # partial checkout would otherwise abort mid-copy and leave a partial install.
 check_templates() {
   local f missing=0
-  for f in CLAUDE.md klawde.md close.md changes-schema.sql; do
+  for f in CLAUDE.md klawde.md close.md changes-schema.sql check-log.sh; do
     if [ ! -f "$SCRIPT_DIR/template/$f" ]; then
       echo "Error: $SCRIPT_DIR/template/$f not found in source." >&2
       missing=1
@@ -90,6 +90,14 @@ check_no_symlink() {
     echo "Error: $1 is a symlink (to '$(readlink "$1")'). Nothing was changed." >&2
     echo "Klawde's Claude and Codex contracts have different content and cannot share one file." >&2
     echo "Remove the symlink and re-run; the install writes a real file in its place." >&2
+    exit 1
+  fi
+}
+
+check_distinct_contracts() {
+  if [ "$TARGET_DIR/CLAUDE.md" -ef "$TARGET_DIR/AGENTS.md" ]; then
+    echo "Error: CLAUDE.md and AGENTS.md refer to the same file (symlink or hard link). Nothing was changed." >&2
+    echo "Separate the contracts into distinct files before installing either layout." >&2
     exit 1
   fi
 }
@@ -157,6 +165,7 @@ rewrite_codex() {
       -e 's/^## Slash Commands$/## Skills/' \
       -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
+      -e 's#\.claude/check-log\.sh#.agents/check-log.sh#g' \
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/close`#`$close`#g' \
       -e 's|^# /klawde: |# $klawde: |' \
@@ -207,13 +216,15 @@ install_claude() {
       echo "Copied $dst."
     fi
   done
-  # The log schema /klawde uses to create changes.db on first run.
-  dst="$TARGET_DIR/.claude/changes-schema.sql"
-  if should_write "$dst"; then
-    mkdir -p "$(dirname "$dst")"
-    cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
-    echo "Copied $dst."
-  fi
+  # The schema for first-run initialization and the read-only log checker.
+  for artifact in changes-schema.sql check-log.sh; do
+    dst="$TARGET_DIR/.claude/$artifact"
+    if should_write "$dst"; then
+      mkdir -p "$(dirname "$dst")"
+      cp "$SCRIPT_DIR/template/$artifact" "$dst"
+      echo "Copied $dst."
+    fi
+  done
 }
 
 # name | template file | skill description
@@ -238,13 +249,15 @@ install_codex() {
     "Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, the last 5 changes.db log entries, and the open-concern counts by area (creating BRIEFING.md and changes.db if missing), then confirm readiness at session start."
   install_skill close close.md \
     "Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
-  # The log schema $klawde uses to create changes.db on first run.
-  dst="$TARGET_DIR/.agents/changes-schema.sql"
-  if should_write "$dst"; then
-    mkdir -p "$(dirname "$dst")"
-    cp "$SCRIPT_DIR/template/changes-schema.sql" "$dst"
-    echo "Copied $dst."
-  fi
+  # The schema for first-run initialization and the read-only log checker.
+  for artifact in changes-schema.sql check-log.sh; do
+    dst="$TARGET_DIR/.agents/$artifact"
+    if should_write "$dst"; then
+      mkdir -p "$(dirname "$dst")"
+      cp "$SCRIPT_DIR/template/$artifact" "$dst"
+      echo "Copied $dst."
+    fi
+  done
 }
 
 # Refuse symlinked, unwritable and blocked destinations before any write.
@@ -252,7 +265,7 @@ if [ "$TARGET" != "codex" ]; then
   check_no_symlink "$TARGET_DIR/CLAUDE.md"
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
               "$TARGET_DIR/.claude/commands/close.md" \
-              "$TARGET_DIR/.claude/changes-schema.sql"; do
+              "$TARGET_DIR/.claude/changes-schema.sql" "$TARGET_DIR/.claude/check-log.sh"; do
     check_dest "$path"
   done
 fi
@@ -260,10 +273,11 @@ if [ "$TARGET" != "claude" ]; then
   check_no_symlink "$TARGET_DIR/AGENTS.md"
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
               "$TARGET_DIR/.agents/skills/close/SKILL.md" \
-              "$TARGET_DIR/.agents/changes-schema.sql"; do
+              "$TARGET_DIR/.agents/changes-schema.sql" "$TARGET_DIR/.agents/check-log.sh"; do
     check_dest "$path"
   done
 fi
+check_distinct_contracts
 gate_preflight
 
 # From the first write onward, any abort must say the install may be partial
@@ -287,13 +301,13 @@ echo ""
 echo "Done. Project initialized at $TARGET_DIR (target: $TARGET, source version: $src_version)"
 case "$TARGET" in
   claude)
-    echo "Wrote CLAUDE.md, .claude/commands/ and .claude/changes-schema.sql in this project."
+    echo "Wrote CLAUDE.md, .claude/commands/, the log schema and .claude/check-log.sh in this project."
     echo "Run /klawde in Claude Code to start a session." ;;
   codex)
-    echo "Wrote AGENTS.md, .agents/skills/ and .agents/changes-schema.sql in this project."
+    echo "Wrote AGENTS.md, .agents/skills/, the log schema and .agents/check-log.sh in this project."
     echo "In Codex, run \$klawde (or pick klawde from /skills) to start a session." ;;
   both)
-    echo "Wrote CLAUDE.md + .claude/ (Claude Code) and AGENTS.md + .agents/ (Codex), including the log schema for each."
+    echo "Wrote CLAUDE.md + .claude/ (Claude Code) and AGENTS.md + .agents/ (Codex), including the log schema and checker for each."
     echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session." ;;
 esac
 if [ "$TARGET" != "codex" ]; then

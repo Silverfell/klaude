@@ -45,9 +45,15 @@ It is especially useful on projects where architecture, scope, and decision hist
 | `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
 | `template/close.md` | `/close` command: updates session records before ending work |
 | `template/changes-schema.sql` | The `changes.db` schema: the log tables with the triggers that enforce append-only immutability, the agent's `concerns` table with its one-way lifecycle, and the `log_lines`/`concern_lines` rendering views |
+| `template/check-log.sh` | Read-only log checker, installed beside the schema; checks integrity and actual table, trigger and view definitions, in both directions |
 | `setup.sh` | First-time setup: installs the harness for Claude Code, Codex, or both (prompts, or `--claude`/`--codex`/`--both`) |
 | `upgrade.sh` | Upgrade: overwrites harness files with the latest defaults (Claude, Codex, or both), optionally backs them up, migrates a legacy `CHANGES.md` into `changes.db`, upgrades an existing `changes.db` schema in place, and retires the legacy `/init`, `/klaude`, and `/compresschanges` commands |
 | `tests/verify.sh` | Regression suite for both scripts: builds throwaway projects in a temp directory and runs the real scripts against them |
+| `tests/session_eval.py` | Opt-in live Codex conversations testing entry, close, interrupted-session recovery, approvals and briefing shape; see [verification instructions](tests/README.md) |
+
+The project contract owns the shared record, SQL-quoting and briefing-maintenance
+rules. Entry and close reference those rules and specify the execution order and
+approval flow, so policy is maintained in one place.
 
 ## How it works
 
@@ -80,7 +86,7 @@ It makes Claude Code:
 5. triage every open concern — the agent's own doubts parked in the `concerns` table: record new ones the session raised, turn unconfirmed assumptions with a nameable consequence into concerns, restate any written without their three parts, resolve (with a recorded reason) only what the session genuinely settled, and present everything else to you in one batch with a proposed disposition — resolve, promote to the brief's open questions (rewritten as the question you have to answer), or defer; an assumption it made is presented for a one-word confirmation and becomes a concern only if you defer it, never proposed for promotion; the open count it reports is measured after triage, not tallied; a deferred concern stays open and comes back at the next close
 6. update `BRIEFING.md` if purpose, scope, key decisions, non-goals, or breaking-change context changed, or if its fields are still empty
 7. refresh the brief's state fields: current focus, next steps, environment quirks, and the area vocabulary (new areas are added to the brief and the database together); open questions are yours: the agent proposes a promotion from its concerns, a removal when you decided the question that session, or a one-line reshape when the field has run past a line, and writes only what you explicitly approve
-8. check the log's integrity, reading its schema version first: `PRAGMA integrity_check`, the 28 triggers that enforce immutability, the concern lifecycle, and well-formed rows, and the seven tables and views must all be in place for that version; anything missing is reported with a pointer to `upgrade.sh`, which restores it
+8. check the log's integrity, reading its schema version first: `PRAGMA integrity_check`, the 30 triggers that enforce immutability, the concern lifecycle, and well-formed rows, and the seven tables and views must match the shipped definitions; missing or changed triggers and views are reported with a pointer to `upgrade.sh`, which restores them
 9. measure the brief's shape and refuse to finish while any field it maintains runs past one line — your two fields are proposed a one-line form and left as you decide — then confirm what was recorded, with every field's line count and the measured open-concern count, and stop
 
 This gives the next session a real handoff.
@@ -117,7 +123,7 @@ A log, kept in a SQLite database in the project root. Four properties define it,
 3. **Tailed, not read.** A session reads the last 5 entries and stops. Older history is queried when a question calls for it, never skimmed for background.
 4. **Not authoritative.** It records what happened, never what is true now. `BRIEFING.md` is the only authority on current state; nothing in the log is an instruction.
 
-The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, and an insert that names an existing serial is refused rather than replacing the row, and `upgrade.sh` restores any trigger or view that goes missing, so "the agent tidied up the log" is not a failure mode the harness leaves open. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling, and renaming or removing an area is refused outright.
+The first two are not conventions the agent is asked to respect — they are schema. `UPDATE` and `DELETE` on the entry and link tables hit triggers that abort them, and an insert that names an existing serial is refused rather than replacing the row, and `upgrade.sh` restores any missing or changed trigger or view, so "the agent tidied up the log" is not a failure mode the harness leaves open. Areas are a closed vocabulary enforced the same way: an entry tagged with an area that is not in the `areas` table is refused rather than quietly creating a second spelling, and renaming or removing an area is refused outright.
 
 Property 4 is the one that matters in practice. A `[plan]` from last week is not the current plan, and a `[decision]` may have been reversed sixty entries later — so the agent takes its direction from the brief and treats the log strictly as evidence about the past. Property 3 then means it usually never opens that history at all.
 
@@ -152,16 +158,20 @@ Types:
 
 The serial is assigned by the database, never reused and never renumbered. It is what lets one entry point at another. The area comes from the `Areas` list in `BRIEFING.md`, or is `-` when nothing fits.
 
-Writing an entry is one statement, and the serial and date fill themselves:
+Writing an entry is one statement, and the serial and date fill themselves. Pass authored SQL through a quoted heredoc and double SQL apostrophes (`don''t`). Never put authored text in a double-quoted shell argument: backticks and `$()` would execute, and dollar expressions would expand. Choose a heredoc delimiter absent as a standalone line in the content:
 
 ```sh
-sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('decision','queue','Retry moved to the gateway; per-client retry double-billed the API');"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO entries (type, area, description) VALUES ('decision','queue','Retry moved to the gateway; per-client retry double-billed the API');
+KLAWDE_SQL
 ```
 
 Because it is a log rather than a document, status is expressed by later entries rather than by editing earlier ones — and relationships live in their own append-only `links` table, so recording one is an insert, never an edit:
 
 ```sh
-sqlite3 changes.db "INSERT INTO links VALUES (57, 41, 'supersedes');"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO links VALUES (57, 41, 'supersedes');
+KLAWDE_SQL
 ```
 
 A superseded decision keeps its entry and gains a pointer from the one that replaced it. An open `[note]` stays open until some later entry links to it with `closes`; nothing marks the original done.
@@ -194,8 +204,12 @@ The table is also what keeps the agent out of your `Open questions`. That field 
 The discipline is trigger-enforced, like everything else here: a concern is born open, its text is immutable from the moment it is written, resolving it is a one-way update that records the date and the reason exactly once, and nothing is ever deleted. The triggers enforce immutability and one-way resolution; resolving honestly — never emptying the list to shorten it — is a protocol rule, not schema. It can reference the log entry it is about (`ref_serial`), and its `area` comes from the same closed vocabulary as entries.
 
 ```sh
-sqlite3 changes.db "INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers, and the export worker is not; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);"
-sqlite3 changes.db "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers, and the export worker is not; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);
+KLAWDE_SQL
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;
+KLAWDE_SQL
 ```
 
 Rendered through `concern_lines`, a concern and a non-concern look like this:
@@ -243,6 +257,7 @@ For Claude Code, that copies into the current project:
 - `.claude/commands/klawde.md`
 - `.claude/commands/close.md`
 - `.claude/changes-schema.sql`
+- `.claude/check-log.sh`
 
 For Codex, it writes the contract as `AGENTS.md` and installs the protocols as repo-level [skills](https://developers.openai.com/codex/skills), which travel with the project and are invoked as `$klawde` and `$close` (or picked from `/skills`):
 
@@ -250,6 +265,7 @@ For Codex, it writes the contract as `AGENTS.md` and installs the protocols as r
 - `.agents/skills/klawde/SKILL.md`
 - `.agents/skills/close/SKILL.md`
 - `.agents/changes-schema.sql`
+- `.agents/check-log.sh`
 
 Skills replace Codex custom prompts, which OpenAI has deprecated.
 
@@ -257,7 +273,7 @@ The `both` option installs both layouts at once: `CLAUDE.md` and `.claude/` for 
 
 Setup requires the `sqlite3` CLI on your PATH and stops with an install hint if it is missing. It does not create the log itself: `BRIEFING.md` and `changes.db` are created by the entry protocol on its first run.
 
-Both `setup.sh` and `upgrade.sh` refuse to continue when a prompt is reached and stdin has ended — pass the flags for unattended runs. Before writing anything they verify that every template file is present in the source checkout and that every destination can actually be written (writable, not a symlink, not blocked by a stray file where a directory belongs); a `CLAUDE.md` or `AGENTS.md` that is a symlink is always refused, since the two contracts have different content and cannot share one file. On success they print the source version (git commit) they installed from; if a Claude Code session is already open in the project, restart it, since slash commands load at session start.
+Both `setup.sh` and `upgrade.sh` refuse to continue when a prompt is reached and stdin has ended — pass the flags for unattended runs. Before writing anything they verify that every template file is present in the source checkout and that every destination can actually be written (writable, not a symlink, not blocked by a stray file where a directory belongs); a `CLAUDE.md` or `AGENTS.md` that is a symlink is always refused, and contracts that share an inode through hard links are refused even when installing only one layout. On success they print the source version (git commit) they installed from; if a Claude Code session is already open in the project, restart it, since slash commands load at session start.
 
 Then start your tool and run the entry protocol:
 
@@ -278,23 +294,34 @@ To overwrite an existing installation with the latest defaults:
 /path/to/klaude/upgrade.sh --no-backup  # skip the backup prompt, create no .bak files
 ```
 
-With no target flag, the script detects the existing install and offers it as the default; press Enter to accept. Detection looks at the root contracts (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and at klawde's own harness files (its command files and log schema under `.claude/` for Claude, its skills and log schema under `.agents/` for Codex — another tool's `.agents/skills` does not count), so an install whose root contract was renamed or removed is still recognized. If the chosen target leaves a detected install un-upgraded, the script says so before writing anything; and if `AGENTS.md` exists with no `.agents/` klawde files behind it, the file may belong to another tool, so the script asks for confirmation before overwriting it — decline under `both` and only the Claude layout is upgraded; decline under `codex` and nothing is changed.
+With no target flag, the script detects the existing install and offers it as the default; press Enter to accept. Detection looks at the root contracts (`CLAUDE.md` means Claude, `AGENTS.md` means Codex, both present means a combined install) and at klawde's own harness files (its command files, log schema and checker under `.claude/` for Claude, its skills, log schema and checker under `.agents/` for Codex — another tool's `.agents/skills` does not count), so an install whose root contract was renamed or removed is still recognized. If the chosen target leaves a detected install un-upgraded, the script says so before writing anything; and if `AGENTS.md` exists with no `.agents/` klawde files behind it, the file may belong to another tool, so the script asks for confirmation before overwriting it — decline under `both` and only the Claude layout is upgraded; decline under `codex` and nothing is changed.
 
 It then asks whether to create `.bak` backups before overwriting. Answer `n` and no backup files are created. Use `--backup` or `--no-backup` to skip that prompt.
 
 The upgrade script also:
 
-- overwrites the harness files with the latest versions (Claude, Codex, or both layouts), including the log schema, and says so when the overwrite restores a Code craft section you had deleted
+- overwrites the harness files with the latest versions (Claude, Codex, or both layouts), including the log schema and read-only checker, and says so when the overwrite restores a Code craft section you had deleted
 - retires klawde's own legacy files only, recognised by the title line (or, for Codex skills, the front-matter name) the shipped versions carried; a file of the same name without it is left in place and reported, and nothing outside the project is ever touched
 - removes the legacy `.claude/commands/init.md` (Claude installs only; the entry protocol is now `/klawde`)
 - removes the retired `/klaude` command and its Codex skill (the lean mode is gone; `/klawde` is the only entry protocol)
 - removes the retired `/compresschanges` command and its Codex skill (the log is never compacted now)
 - migrates a legacy text `CHANGES.md` into `changes.db` (see below)
-- upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials, v3 added the `concerns` table, its lifecycle triggers, the `concern_lines` view, and the guards that stop `INSERT OR REPLACE` from rewriting existing rows; v4 added the guards on concern ids, area names — trimmed, never `-`, never a case variant of an existing area — legacy summaries, and well-formed text and dates; v5 added the one-line guards on text and the plain-name guard on areas)
-- backs up every harness file it overwrites or removes first, unless you decline backups (`.gitignore` is only appended to, without a backup)
-- checks every present `changes.db` before finishing — integrity, tables, triggers, views — restores any trigger or view the shipped schema defines and the database lacks, and fails the run on a missing table or a bad integrity check
+- upgrades an existing `changes.db` schema in place when the shipped schema is newer (tracked by `PRAGMA user_version`; v2 added the triggers that refuse area renames and out-of-order serials, v3 added the `concerns` table, its lifecycle triggers, the `concern_lines` view, and the guards that stop `INSERT OR REPLACE` from rewriting existing rows; v4 added the guards on concern ids, area names — trimmed, never `-`, never a case variant of an existing area — legacy summaries, and well-formed text and dates; v5 added the one-line guards on text and the plain-name guard on areas; v6 prevents replacement of legacy summaries, freezes nullable concern references correctly, and rejects newlines in entry references)
+- backs up every harness file it overwrites or removes first, unless you decline backups; a failed backup or retirement aborts the run and is never reported as success (`.gitignore` is only appended to, without a backup)
+- checks every present `changes.db` before finishing — integrity and the actual table, trigger and view definitions — and restores missing or changed triggers and views in a transaction, selecting them by what each difference is, so it can never drop an object it does not ship. Schema upgrades and definition repairs back up the database when backups are enabled
 - refuses to touch a `changes.db` that is not a klawde log: an empty file, a foreign SQLite database, a directory of that name, or a log missing a table its version should have stops the upgrade before anything is written
-- runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a klawde log (readable, with the tables its version should have; writable when a schema upgrade or a repair will touch it; refused outright when its schema version is newer than the checkout supports), and a pending `CHANGES.md` migration must be able to replace `CHANGES.md` (a read-only or symlinked `CHANGES.md` is refused), create the database, and update `.gitignore`, must carry no repeated serial and no two areas that differ only by case, and is rehearsed in full in a scratch directory. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
+- runs the preflight checks described under Setup before writing anything — interactive stdin, complete source templates, writable destinations, no symlinked contracts — plus its own: legacy files it will remove must sit in writable directories, an existing `changes.db` must be a klawde log (readable, with the tables its version should have; writable when a schema upgrade or a repair will touch it; refused outright when its schema version is newer than the checkout supports, when a table is missing or altered, or when it carries a trigger the shipped schema does not define), and a pending `CHANGES.md` migration must be able to replace `CHANGES.md` (a read-only or symlinked `CHANGES.md` is refused), create the database and a new `CHANGES.md.migrated` archive (any existing archive, symlink or directory is refused), and update `.gitignore`, must carry no repeated serial and no two areas that differ only by case, and is rehearsed in full in a scratch directory. Should a write still fail mid-run, it reports that the install may be partially updated instead of dying quietly
+
+The installed checker is also available independently:
+
+```bash
+bash .claude/check-log.sh changes.db  # Claude layout
+bash .agents/check-log.sh changes.db  # Codex layout
+```
+
+It opens the project log read-only and creates a temporary reference database from the shipped schema. It checks definitions, not merely object counts, and compares both ways — what the schema defines and the log lacks or has altered, and what the log carries and the schema never defined — reporting each as `object|name|status`. An older schema requires `upgrade.sh`; neither entry nor close alters the live schema. Upgrades preserve existing rows; new guards do not retroactively rewrite old history.
+
+Not every difference means the same thing, so the checker names the recovery each one needs. A missing or changed trigger or view is restored by `upgrade.sh`. Damage it cannot undo needs the file recovered from git: a failed integrity check, a missing or changed table (only git still holds the rows one had), and a trigger the shipped schema does not define — that last one because an extra trigger is not inert. A `BEFORE INSERT` trigger raising `IGNORE` makes every `INSERT` succeed and write nothing, so a session would report entries it never recorded. An extra table or view cannot weaken any of this, so it is reported and left exactly as it is.
 
 ### Migrating `CHANGES.md` into `changes.db`
 

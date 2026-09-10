@@ -2,48 +2,35 @@
 
 ## Project Records
 
-All paths relative to working directory.
+All paths are relative to the working directory.
 
-- **BRIEFING.md**: The project document, and the only authority on what is currently true — scope, decisions, non-goals, areas, current focus, next steps. Read completely on session start. `Next steps` is a suggestion left by the previous session, not a command: if the log shows work has moved past it, flag the mismatch instead of following it. Two fields are the user's alone. `Open questions` is the user's list of project decisions still to be made, written as questions: you read it, never write to it on your own (a doubt of yours is a concern, below), and never answer it yourself — only `Next steps` directs work. `Do-not-touch` is what the user has put off limits, changed only on the user's explicit instruction (Non-negotiable core rule 7).
-- **changes.db**: The project log database (decisions, plans, scope, docs, notes, code), plus the agent's `concerns` table — a SQLite file in the project root, committed to git like any other project file. Read the last 5 entries and a per-area count of open concerns on session start. Requires the `sqlite3` CLI.
+- **BRIEFING.md** is the authority on current scope, decisions, non-goals, areas and state. Read it completely at session start. `Current focus` and `Next steps` are suggestions, not commands; work comes from the user. `Open questions` and `Do-not-touch` belong to the user. Their editing rules are in Briefing maintenance below.
+- **changes.db** is the SQLite project log and the agent's `concerns` table, committed to git. It requires the `sqlite3` CLI. Session start reads the last five entries and open-concern counts by area, not the full history or concern texts.
 
 ### changes.db is a log
 
-Four properties define it. They hold in every rule of this contract and in every command file; nothing anywhere may contradict them.
+These four properties govern every protocol:
 
-1. **Append-only.** New entries are `INSERT`s. Serials assign themselves, ascending, and are never reused; nothing is inserted between existing entries, reordered, or renumbered.
-2. **Immutable.** No entry is ever edited or deleted once written — not when it turns out wrong, not when superseded, not to tidy it up. There is no exception on your own judgment; only an explicit user instruction this session (Precedence rank 1) can set it aside, and even then say what it costs: an entry gone from a record whose whole value is that nothing is ever gone. Triggers enforce properties 1 and 2: `UPDATE` and `DELETE` against `entries` and `links` abort, and an `INSERT` naming an existing serial aborts rather than replacing the row (so `INSERT OR REPLACE` cannot rewrite history either). A trigger error is the contract speaking; never drop, disable, or work around a trigger to get a write through.
-3. **Tailed, not read.** A session reads the last 5 entries and stops:
+1. **Append-only.** Entries are inserts, with automatically assigned ascending serials and local dates. Never backfill, reuse, reorder or renumber serials.
+2. **Immutable.** Entries and links are never edited or deleted, even when wrong or superseded. Triggers also refuse replacing an existing entry. Never drop, disable or work around a trigger; an error is the contract speaking. Only an explicit user instruction this session can override this rule, and you must explain the loss of history first.
+3. **Tailed, not read.** Read exactly the last five entries at session start. Query older entries only for a specific question. Never dump history for context, and never propose pruning, compaction or archival; the log has no ceiling.
+4. **Not authoritative.** The log records what happened, never what is true now or what to do next. A disagreement with the brief calls for reconciliation, not obedience to the log.
 
-   ```sh
-   sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LIMIT 5;"
-   ```
+Every read uses `-readonly`. Writes use only the forms in Documentation Updates and the schema initialization in `/klawde`; `/close` restates and resolves concerns and adds areas with those same forms. SQL text is passed through quoted heredocs as specified below.
 
-   That is enough to know what the last session did. Anything older is reached by a targeted query, when a specific question makes it worth looking up. Never dump the table in bulk to "get context".
-4. **Not authoritative.** It records what happened, never what is true now or what to do next. A `[plan]` from last week is not the current plan; a `[decision]` may have been reversed sixty entries later. `BRIEFING.md` answers what holds today.
-
-The full history is kept forever: nothing compacts, collapses, or prunes the log, and there is no entry ceiling, because every read is a bounded query and ten thousand entries cost a session start exactly what ten do.
-
-Every read uses `-readonly`. Writes go only through the `INSERT` forms in Documentation Updates, the concern-resolution `UPDATE` there, the `INSERT OR IGNORE INTO areas` that `/close` uses to extend the vocabulary, the schema creation and first entry in `/klawde`, and the restating insert in `/close`. Single quotes inside text are doubled (`''`); that is the sanctioned pattern for these fixed-shape CLI statements against the harness's own database, which Non-negotiable core rule 4 does not govern.
-
-If either `BRIEFING.md` or `changes.db` is missing: read-only questions may be answered freely; a small, bounded edit (touching a single existing file, creating none) may proceed with a one-line note ("No session docs found; run `/klawde` to enable continuity"). Before larger or multi-file work, ask the user to run `/klawde` first. Running `/klawde` is always exempt: it creates these files.
+If either project record is missing, read-only questions may be answered freely. A small edit to one existing file, creating none, may proceed with "No session docs found; run `/klawde` to enable continuity". Before larger work, ask the user to run `/klawde`. The entry protocol itself is exempt because it creates these files.
 
 ### The concerns table
 
-`changes.db` also holds a `concerns` table, deliberately not part of the log. A concern is a doubt you hold about the project — present tense, where the log is history: a fact plus the trouble it implies. It is yours, and it is not the brief's `Open questions`.
+A concern is a doubt about the project, expressed in three parts on one line separated by semicolons: **what you saw; what it may break or leaves undecided; what settles it**. The consequence may be a guess, labeled as such when presented. Semicolons alone do not make three facts a concern.
 
-A concern has three parts, on one line, separated by semicolons. A line missing any part is not a concern and is not written:
+Read open concerns for the relevant area and `-` before opening one, so it is not duplicated. Bare facts about code are not recorded; external context may be a `[note]`. Tasks belong in `Next steps`, verification evidence in the response. A worry without an observation is not recorded.
 
-- **What you saw.** A fact from the code, the log, or the session. A worry with nothing seen behind it (`retry might be flaky`) is not recorded.
-- **What it may break or leaves undecided.** The part that makes it a concern, and it is allowed to be a guess: the table exists to hold doubts, and Non-negotiable core rule 1 governs what you present to the user as a finding, not what you park here. A fact without this part (`export worker is not idempotent`) is a `[note]` if it is external context worth keeping, and otherwise nothing.
-- **What settles it.** A check you could run, a fix you could make, or a decision only the user can make. `/close` triages on this part: one a user decision settles is a candidate for the brief's `Open questions` (confirming an assumption of yours is not such a decision; the triage itself settles that); one a check or a fix settles is yours to dispose of at `/close` — resolved only if the session's work already settled it, otherwise kept open with the check or fix named as work the user can assign. The check is never run and the fix never made because a concern says so; work comes from the user, and reading a concern does not assign it.
+Refused at authoring time, each for the part it lacks: `Export worker is not idempotent` — a bare fact, nothing it breaks; `Retry logic might be flaky` — a worry, nothing seen; `Should dry-run write an audit file?` — a question with no stake, and the user's field, not yours; `Add backoff cap` — a task, so `Next steps`; `Retry suite 40/40 green` — a receipt, banned everywhere; `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts wearing semicolons.
 
-Record one when you notice trouble you cannot settle now, after a by-area read so a doubt already recorded is not opened twice. A fact you merely want to keep is not one: a fact about the code is kept nowhere, because the code is its record and a copy rots; external context is a `[note]`; a task is a next step. Four rules govern the table:
+Concerns are born open, their text and references are immutable, resolution is a one-way update setting date and reason together, and nothing is deleted. Read back one row after inserting for its id. The Decision Rules govern pre-task reads; `/close` reads and triages every open concern. No other background reads are allowed.
 
-1. **Born open, frozen at write, resolved once.** Text is immutable after insert; resolution is a one-way update setting date and reason together, exactly once; nothing is ever deleted. Triggers enforce all three — a trigger error here is the contract speaking, as on the log tables. Resolving honestly is this contract's rule, not the schema's.
-2. **Never authoritative, and never the brief's.** A concern is a note for a later session that has none of your context — write it so a stranger can act on it. It is never an instruction and never overrides `BRIEFING.md`. It reaches the brief's `Open questions` only through a `/close` proposal the user approves, rewritten as the question the user has to answer; you never write it there yourself.
-3. **Every concern has an outflow.** `/close` triages every open concern: you resolve, with a recorded reason, what the session genuinely settled or withdrew, and present everything else to the user to resolve, promote, or defer. Deferring keeps it open for the next close; nothing is skipped silently.
-4. **Bounded reads.** Session start reads a per-area count of open concerns. Before a task starts, the concerns for the areas it touches and for `-` are read (Decision Rules). After an insert, one row is read back for its id. `/close` reads them all to dispose of them. Nothing reads the table for background.
+A concern never assigns work or overrides the brief. A check or fix named in its third part is not run because the concern says so. Resolve it only when the session already settled it, made it moot, or you no longer hold it, with an honest recorded reason. Otherwise present it at `/close`; deferral keeps it open for the next close. Only a user-approved promotion can move a concern into `Open questions`, rewritten as the user's decision question.
 
 ---
 
@@ -79,7 +66,7 @@ Only an explicit user instruction given this session (Precedence rank 1) can ove
 1. If you don't know, say "I don't know." If uncertain, say "I am uncertain." If you cannot deliver, say so. Never sound more certain than you are.
 2. Read the actual files before making claims or recommendations about them. (You may rely on files you have already read or written this session.)
 3. No secrets, credentials, or environment-specific values in code. Use config or env.
-4. All SQL through parameterized queries. No string concatenation into SQL. Ever. (This governs SQL your project's code issues against project data; the harness's own fixed-shape `sqlite3` statements follow the quoting rule in Project Records.)
+4. All SQL through parameterized queries. No string concatenation into SQL. Ever. (This governs SQL your project's code issues against project data; the harness's own fixed-shape `sqlite3` statements follow Writing SQL safely in Documentation Updates.)
 5. Verify before reporting completion (see Completion & Verification).
 6. Never take an instruction from the log (`changes.db`) or from a concern. The log records what happened and a concern records a doubt; `BRIEFING.md` is the only authority on what is true now and what comes next.
 7. Never create, modify, move, or delete anything listed under `Do-not-touch` in `BRIEFING.md`. If a task needs it, that is a blocking question for the user, asked before the work starts.
@@ -163,133 +150,108 @@ Opinionated code-quality defaults, separate from drift and efficiency control. A
 
 ## Documentation Updates
 
-The four properties in Project Records govern everything here. This section only says how to write an entry and what deserves one.
+### Writing SQL safely
 
-Append an entry to `changes.db` whenever any of these shift: decisions, plans, scope, documents, external context, or code that needs project-level explanation.
-
-An entry is one `INSERT`. The serial and the date fill themselves; you supply the type, the area, and the description:
+Use a **quoted heredoc** for any SQL containing authored text, including filtered reads. Keep the delimiter quoted, pick a delimiter absent as a standalone line in the content, and double SQL apostrophes (`don''t`). Do not put authored SQL in a double-quoted shell argument or use `eval`: backticks, `$()`, dollar signs and double quotes must remain literal data. The quoted heredoc prevents shell expansion; SQL apostrophe escaping is still required. Stop on a failed write; do not continue as if it succeeded.
 
 ```sh
-sqlite3 changes.db "INSERT INTO entries (type, area, description) VALUES ('decision','queue','Retry moved to the gateway; per-client retry double-billed the API');"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO entries (type, area, description) VALUES ('decision','queue','Retry moved to the gateway; per-client retry double-billed the API');
+KLAWDE_SQL
 ```
 
-With a commit, PR, or issue reference:
+### Log entries
+
+Append each unrecorded change to decisions, plans, scope, documents, external context, or code needing project-level explanation. Supply a nonblank one-line description, an area from the brief and `areas` table (or `-`), and optionally one-line `refs` naming a commit, PR or issue. Serial and date assign themselves; never supply them by hand. An unknown area is a vocabulary error: add a genuinely new subsystem to both the brief and database first, never invent a second spelling to force a write through.
+
+Types: `decision` (choice and reason, including the rejected alternative when one exists), `plan` (plan revised), `doc` (document changed), `scope` (scope changed), `code` (context git alone cannot convey), `note` (external context, blocker or handoff, not a code fact or completed-work receipt).
 
 ```sh
-sqlite3 changes.db "INSERT INTO entries (type, area, description, refs) VALUES ('code','api','Moved retry logic into ApiClient; callers no longer handle 429s','abc1234');"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO entries (type, area, description, refs) VALUES ('code','api','Moved retry logic into ApiClient; callers no longer handle 429s','abc1234');
+KLAWDE_SQL
 ```
 
-Double every single quote inside the text (`don''t`, `it''s`).
-
-Fields:
-
-- `serial` — an ascending integer the database assigns. Never reused, never renumbered, never edited. This is what lets one entry reference another.
-- `date` — defaults to today's local date. Do not pass it by hand.
-- `type` — one of the six below.
-- `area` — one of the areas on the brief's `- Areas:` line, or `-` when none fits. The `areas` table mirrors that line and is a closed vocabulary a trigger enforces: an unknown area aborts the insert instead of silently creating a second spelling of an existing facet. The two must agree, so `/close` adds an area to both when the brief gains one. An area is never renamed or removed — immutable entries already reference it, and the database refuses both. If work keeps landing outside the list, propose adding an area at the next `/close`.
-- `description` — free text, one line, never empty.
-- `refs` — optional: a commit, PR, or issue.
-
-Types:
-- `decision`: architectural, design, or process choice made; name the rejected alternative when one exists (`X over Y; reason`)
-- `plan`: plan created or revised
-- `doc`: document added, updated, or removed
-- `scope`: scope added, removed, or clarified
-- `code`: code change that needs project-level context git alone can't convey
-- `note`: external context, blocker, handoff, or an open finding about the world outside the code — never a fact the code itself records, and not a record of work already finished
-
-Relationships between entries live in the `links` table, never inside an entry. That entry 57 supersedes 41, or closes an open note 43, is an `INSERT`, never an edit:
+Relationships are separate inserts, from a later serial to an existing earlier one. A reversal gets a `supersedes` link plus the reason for abandoning the old decision; resolving an open `[note]` gets a `closes` link. Carry the live decision into the brief. Neither operation changes the earlier entry.
 
 ```sh
-sqlite3 changes.db "INSERT INTO links VALUES (57, 41, 'supersedes');"
-sqlite3 changes.db "INSERT INTO links VALUES (57, 43, 'closes');"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO links VALUES (57, 41, 'supersedes');
+INSERT INTO links VALUES (57, 43, 'closes');
+KLAWDE_SQL
 ```
 
-The `from` serial is always the later entry. A link naming a serial that does not exist is refused. The `log_lines` view renders links after the description as `supersedes=041` / `closes=043`, so an entry reads as a single line without any line ever having been rewritten.
+Refused at authoring time, as `log_lines` would render them: `[code] (-) fixed bug` — a commit message; `[code] (ingest) batchSize 100 -> 500` — the config file owns that number and this copy rots; `[note] (-) Verified: 200/200 valid, console clean` — a receipt; `[decision] (authentication) Use JWTs` — the area list says `auth`, and adding the second spelling to force the write through splits the facet for good.
 
-Four rules keep the log honest.
+Refuse junk before inserting; history cannot be cleaned up later:
 
-1. **Supersession links, never deletes.** A later reversal does not make an entry untrue. When a decision replaces an earlier one, insert the new decision, then a `supersedes` link naming the entry it replaces, and leave that entry untouched. Then update `BRIEFING.md` in the same session: the log now holds both, and by property 4 it is not the thing that says which one counts.
-2. **No verification receipts.** Test counts, measured distributions, "0 failures across N runs", console-clean confirmations belong in the COMPLIANCE `Verified:` line of your response, never in the log; their value expires the moment the code they cover changes. Record a measurement only when the measurement itself is an open decision (an unresolved perf number, a limit nobody has ruled on).
-3. **No parameter narration.** If code, config, or an asset file is authoritative for a value, do not copy it here — the copy goes stale silently and future sessions trust it. Record why a value is the way it is, never what it currently is.
-4. **Record the lesson, not the incident.** Session conduct, frustration, blame and blow-by-blow correction history are not project records. When something went wrong and taught something durable, record the transferable part — as a `[note]` if it is an environment trap, or as the rejected alternative's reason inside the `[decision]` you are writing now — never by editing an existing entry. "Approach X was abandoned; the API bills per generation and the account had no credit" earns its place. "Third attempt at X failed and the user was unhappy" does not.
+- Verification receipts (test counts, console checks, measured distributions) belong in COMPLIANCE `Verified:`, not the log. An unresolved measurement that is itself a decision may be recorded.
+- Do not copy parameter values owned by code, config or assets. Record why, never narrate values.
+- Do not record blame, frustration or correction chronology. Record a durable lesson, as an external-context note or a decision's rejected-alternative reason.
+- "Fixed bug" belongs in a commit message; a log entry must explain something a later session needs.
 
-Nothing ever cleans up the log, so junk has to be refused at authoring time — an entry is permanent the instant the `INSERT` returns. The only fix for a bad entry is a better later entry, with a `supersedes` link where one applies. Openness is not a field either, because a field would have to be edited: a `[note]` stays open until a later entry inserts a `closes` link naming its serial.
+A bad entry is corrected by a later entry, with a supersession link where applicable. `legacy_summaries` holds immutable imports from the retired text log; query it only for a specific question reaching before migration.
 
-`legacy_summaries` holds rolled-up summaries from the retired text log, imported by `upgrade.sh`. It is not part of the log and no protocol reads it; query it only when a specific question reaches back before the migration.
+### Concern writes and reads
 
-A concern (The concerns table) is the one write here that is not a log write. One `INSERT` opens it; one `UPDATE` — the only sanctioned `UPDATE` in this database — resolves it, date and reason together, exactly once:
-
-```sh
-sqlite3 changes.db "INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Retry cap assumes idempotent consumers, and the export worker is not; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);"
-sqlite3 changes.db "UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;"
-```
-
-`area` follows the same closed vocabulary as entries; `ref_serial` is optional and must name an existing entry. Read the id back after an insert for the COMPLIANCE line — each `sqlite3` call is its own connection, so `last_insert_rowid()` from a later call tells you nothing, and this one-row read is not a background read:
+Open a concern using the three-part rule in Project Records. Its optional `ref_serial` must name an existing entry. Resolve by setting date and reason together, once:
 
 ```sh
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Export worker is not idempotent; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);
+KLAWDE_SQL
 sqlite3 -readonly changes.db "SELECT line FROM concern_lines ORDER BY id DESC LIMIT 1;"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;
+KLAWDE_SQL
 ```
 
-Good concerns, as `concern_lines` renders them:
+Each CLI call is its own connection: `last_insert_rowid()` in a later call cannot identify an earlier insert. Use the one-row read-back for the COMPLIANCE id.
 
-- `2026-06-03 #07 (queue) Retry cap assumes idempotent consumers, and the export worker is not; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry  re=041`
-- `2026-06-05 #08 (cli) Dry-run writes nothing to disk; a user checking a dry run has no record of what it would have done; settles when the user says whether dry-run should write an audit file`
-- `2026-06-05 #09 (import) Importer trusts the order total from the API; a mismatched line-item sum would import silently; settles by checking whether the API ever sends one`
-
-Bad concerns:
-
-- `Export worker is not idempotent` — a bare fact. Nothing says what it breaks. If it matters, say what; if it does not, it is not a concern.
-- `Retry logic might be flaky` — a worry with nothing seen behind it. Record what you saw, or record nothing.
-- `Should dry-run write an audit file?` — a question with nothing seen and no stake stated. In that form it is a line for the user's `Open questions`, and only the user puts it there; #08 above is the same doubt written as a concern.
-- `Add backoff cap` — a task. Tasks are `Next steps` in the brief.
-- `Retry suite 40/40 green` — a verification receipt, banned everywhere.
-- `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts with semicolons between them. The separators are not the parts: nothing here may break, and nothing settles it.
-
-Querying the log is how you reach anything past the last five entries. Do this when a specific question calls for it, never to gather background:
+Before a task, read the concerns for each area it touches and for `-`:
 
 ```sh
-# every decision ever recorded
-sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries WHERE type='decision');"
-# everything that touched one area
-sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries WHERE area='auth');"
-# an entry and whatever references it
-sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT from_serial FROM links WHERE to_serial=41) OR serial=41;"
-# notes still open (no later entry closes them)
-sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='note' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='closes'));"
-# live decisions (never superseded)
-sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='decision' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='supersedes'));"
-# open concerns (the `/close` triage read)
-sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 ORDER BY id;"
-# open concerns in one area (the pre-task read: once per area the task touches, and once for '-')
-sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 AND id IN (SELECT id FROM concerns WHERE area='queue') ORDER BY id;"
+sqlite3 -readonly changes.db <<'KLAWDE_SQL'
+SELECT line FROM concern_lines WHERE is_resolved = 0 AND id IN (SELECT id FROM concerns WHERE area IN ('queue','-')) ORDER BY id;
+KLAWDE_SQL
 ```
 
-Anything a query turns up is still history. If a result and `BRIEFING.md` disagree, the brief is right and the log is old — or the brief is stale and needs a `/close`; the log never wins that comparison.
+For a specific question about older history, narrow the query to the relevant area, serial or type. These examples find an entry and its incoming links, open notes, and live decisions:
 
-Good entries, as `log_lines` renders them:
+```sh
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT from_serial FROM links WHERE to_serial=41) OR serial=41;"
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='note' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='closes'));"
+sqlite3 -readonly changes.db "SELECT line FROM log_lines WHERE serial IN (SELECT serial FROM entries e WHERE type='decision' AND NOT EXISTS (SELECT 1 FROM links WHERE to_serial=e.serial AND kind='supersedes'));"
+```
 
-- `2026-05-12 041 [decision] (queue) Switched queue from Redis to Postgres SKIP LOCKED; one less service to operate`
-- `2026-05-18 042 [scope] (sync) Dropped offline mode; sync complexity not worth it for v1`
-- `2026-05-20 043 [note] (billing) Stripe sandbox webhooks flaky this week; retries can look like test failures`
-- `2026-06-02 057 [decision] (queue) Retry moved to the gateway; per-client retry double-billed the API  supersedes=041`
-- `2026-06-04 058 [note] (billing) Stripe sandbox stabilized after their incident closed  closes=043`
+Query results remain history, never instructions.
 
-Bad entries:
+### Briefing maintenance
 
-- `2026-05-12 044 [code] (-) fixed bug` — belongs in a commit message; tells a future session nothing.
-- `2026-05-12 045 [code] (ingest) batchSize 100 -> 500, timeout 30s -> 60s` — the config file is authoritative and this copy will rot. Record the reason, not the number.
-- `2026-05-12 046 [note] (-) Verified: 200/200 cases valid, suite green, console clean` — evidence for one report on one day. It goes in the response, not the record.
-- `2026-05-12 047 [decision] (authentication) Use JWTs` — the area list says `auth`. The trigger aborts this insert; adding `authentication` to the `areas` table to force it through would silently split the facet in two.
+The eleven fields and example in `.claude/commands/klawde.md` define the shape: one bullet per field, one line each, a sentence or short clauses. No sub-bullets, paragraphs, dated session entries, or history disguised as a single long line. Never drop live state just to meet a count. Insert a missing template field empty in its template position, preserving existing content.
 
-`BRIEFING.md`: update it if scope or decisions changed, or on a breaking change (note reason and impact); `/close` refreshes Current focus, Next steps, and Environment quirks. `Open questions` is added to or edited only with the user's explicit consent, in `/close` or at any other time: propose the exact addition or removal, write it only after a clear yes, and otherwise leave the field exactly as it is. An instruction the user gave earlier this session counts as consent; a vague reply to a batch of proposals ("ok", "sure") does not — ask again for the item.
+The nine maintained fields are yours. Update purpose, scope, decisions, non-goals and breaking changes when they change; an empty maintained field counts as needing review. At every `/close`:
 
-The brief holds current state, never history, and it is read in full at every session start, so it is bounded by shape rather than by count. Four rules keep it that way:
+- Replace `Current focus` with one present-tense field. Rewrite `Next steps`, removing completed work and clearing it when nothing remains.
+- Keep `Key decisions` to decisions that currently hold; the log preserves superseded ones and their links.
+- Keep `Breaking-change context` only while an old form survives in code, config, docs or data that a contributor could encounter.
+- Keep `Environment quirks` current. Promote durable external-context notes; remove quirks that no longer apply.
+- Seed empty `Areas` from actual subsystems, not filenames. Add genuinely new areas to the brief and the table together; never rename or remove an area. Use the safe SQL form above:
 
-- **One bullet per field, one line each.** A field's value is a sentence or a short list of clauses, matching the example brief in `.claude/commands/klawde.md`. No sub-bullets, no paragraphs, no dated entries. A field that seems to need more is holding history or working notes; the fix is to move content out, never to restructure the field. `/klawde` stops on one of the nine fields you maintain that breaks this, as it stops on a scope contradiction, and `/close` measures every field and will not finish with one of those nine over a line; on `Open questions` and `Do-not-touch`, and on any line the template does not have, both protocols only measure, propose, and report.
-- Exactly **one** `Current focus`, present tense. Sessions **replace** it; they never append a dated one alongside.
-- **Every field has an outflow.** `Next steps` is kept true: remove what is done. `Open questions` is the user's: an item leaves only when a `[decision]` entry answers it — this session's or an earlier one's — and only with the user's consent, as above. Never drop a live item to hit a count. `Key decisions` holds the decisions that currently hold: when one is superseded, its replacement enters and the old one leaves — the log keeps both, plus the link. `Breaking-change context` holds only what a new contributor still has to know to work on the code today; once the old form is gone from every place a session could meet it, the entry goes. `Environment quirks` holds what is still true; a quirk that no longer bites is removed.
-- **No narration and no working notes.** A bullet that narrates a past session (`Styling pass`, `Auth refactor`, `Cleanup pass`) belongs in `changes.db`. Findings, progress, verification results, and things tried belong in the response; doubts belong in the `concerns` table. If a line would not help a new contributor understand what is true now, it does not go in.
+```sh
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT OR IGNORE INTO areas VALUES ('ingest');
+KLAWDE_SQL
+```
+
+Restore an oversized maintained field by retaining current state in one line, moving unrecorded history into the log, and dropping working notes (findings, progress, tests, things tried). Report restored fields. Entry only detects shape violations and recommends `/close`; it does not discard content by repairing them.
+
+`Open questions` and `Do-not-touch` are the user's fields, never part of this maintenance sweep. Empty user fields stay empty. Their edits need explicit consent before writing; an instruction already given this session needs no second ask. A vague response to a batch ("ok", "fine") approves none of its items: ask again with each item named.
+
+- `Do-not-touch` changes only on the user's instruction or approval of an exact one-line reshape.
+- Add to `Open questions` only a user-approved decision question, including a concern promotion approved at `/close`. Propose removal of an answered question only when a recorded `[decision]` answers it. Propose removal of a finding or fact verbatim. Never answer an open question by assumption.
+- For either user field over one line, propose the exact one-line rewrite with the same items, nothing added or dropped. On refusal, preserve it and report its measured count; propose again at the next close if still oversized.
+- Foreign fields and trailing content also require approval before moving or removing them. Propose their destination or removal; preserve and report on refusal. A bullet under a user field that reads as one of its items belongs to that field, however the measurement labels it.
 
 ---
 
