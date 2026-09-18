@@ -1,6 +1,6 @@
 # /close: Session Close Protocol
 
-Persist state at session end or as a mid-session checkpoint. Use the project contract's Documentation Updates for SQL forms, record eligibility, and briefing maintenance; this protocol specifies their order and approval flow.
+Persist state at session end or as a mid-session checkpoint. Use the project contract's Documentation Updates for log SQL forms, log eligibility, and briefing maintenance; concern writes are defined in step 3. This protocol specifies their order and approval flow.
 
 ## Steps
 
@@ -11,6 +11,21 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 ```
 
    If either record is missing, create it using the forms in `.claude/commands/klawde.md`, including schema initialization and area seeding. If the schema is missing, stop and recommend `upgrade.sh`.
+
+   Then check the log before the first write, using the shipped read-only checker:
+
+```sh
+bash .claude/check-log.sh changes.db
+```
+
+   A damaged schema can silence an insert or accept one the log should refuse, so on any error stop here: write nothing to the database or the brief, never repair the live schema, and output only this, with the checker's error and the recovery it names:
+
+```
+Close stopped; nothing was written.
+changes.db: <checker error>, <recovery action>. Run `/close` again once the log is repaired.
+```
+
+   If the checker or schema file is missing, report the check as unavailable, recommend `upgrade.sh`, and continue.
 
 2. Recover all session work from the conversation, `git status`, `git diff`, and `git log` for commits made this session. Append each unrecorded change using the contract's Log entries section. After interruption or compaction, reconcile existing records against the recovered work before inserting; a repeated close must not duplicate already-recorded work.
 
@@ -34,9 +49,26 @@ UPDATE concerns SET resolved = date('now','localtime'), resolution = 'retired; n
 KLAWDE_SQL
 ```
 
-   - Resolve what this session answered, made moot, or you no longer hold, with the reason. An answer given at a certainty gate counts; one that decided anything also gets a `[decision]` in step 2. Never resolve a live doubt to shorten the list. A concern short of its three parts is restated as a complete one and resolved as `restated as #N`, or resolved with the reason it was not a concern.
-   - Write the doubts you still hold about work this session changed, under the contract's rule: at most three, each three-part, each with `ref_serial` naming that work's entry from step 2, none about code the session did not change. Recover unconfirmed `ASSUMPTION:` items from the conversation and diff; one whose being wrong has a nameable consequence is presented for confirmation below and becomes a concern only if the user defers it.
-   - Present what is still open in one batch, each with a proposed disposition (resolve with reason, promote, or keep open) and each consequential assumption named for confirmation. The close does not wait for the reply: keep open is the default, and dispositions the user gives afterwards are applied with the contract's forms. Promote only on a named yes, as the exact decision question rather than the concern text, into `Open questions`; if the user answers the question instead, record the decision and resolve the concern. A confirmed assumption needs no row; a corrected one becomes a decision and, if it changes code, a next step.
+   - Resolve what this session answered, made moot, or you no longer hold, with the reason. An answer given at a certainty gate counts; one that decided anything also gets a `[decision]` in step 2. Never resolve a live doubt to shorten the list. A concern short of its three parts is restated as a complete one and resolved as `restated as #N`, or resolved with the reason it was not a concern. A restatement is maintenance, not authoring: it carries the original's `area` and `ref_serial` unchanged, claims nothing the original did not beyond completing its parts, replaces exactly one row, and stands outside the three-per-close cap and the this-session rule below. One that cannot be completed truthfully was not a concern; resolve it with that reason.
+   - Write the doubts you still hold about work this session changed: at most three per close, each in the contract's three parts, each with `ref_serial` naming that work's entry from step 2 (no entry, no concern), none about code the session did not change. Recover unconfirmed `ASSUMPTION:` items from the conversation and diff; one whose being wrong has a nameable consequence is presented for confirmation below and becomes a concern only if the user defers it.
+
+     Refused at authoring time, each for what it lacks: `Export worker is not idempotent` — a bare fact, nothing it breaks; `Retry logic might be flaky` — a worry, nothing seen; `Should dry-run write an audit file?` — a question with no stake, and the user's field, not yours; `Add backoff cap` — a task, so `Next steps`; `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts wearing semicolons; `Legacy importer has no tests; a refactor could break it; settles when tests exist` — about code this session did not change, so not yours to park.
+
+   - Present what is still open in one batch, each with a proposed disposition (resolve with reason, promote, or keep open) and each consequential assumption named for confirmation. A concern whose third part is a decision of the user's is proposed for promotion, as the exact question it would add. The close does not wait for the reply: keep open is the default, and dispositions the user gives afterwards are applied with the forms below. Promote only on a named yes, as the exact decision question rather than the concern text, into `Open questions`; if the user answers the question instead, record the decision and resolve the concern. A confirmed assumption needs no row; a corrected one becomes a decision and, if it changes code, a next step.
+
+   Open a concern, read its id back, and resolve by setting date and reason together, once:
+
+```sh
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Export worker is not idempotent; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);
+KLAWDE_SQL
+sqlite3 -readonly changes.db "SELECT line FROM concern_lines ORDER BY id DESC LIMIT 1;"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;
+KLAWDE_SQL
+```
+
+   Each CLI call is its own connection: `last_insert_rowid()` in a later call cannot identify an earlier insert; use the one-row read-back.
 
    Measure the open total for the closing block; use the query's number, never your tally:
 
@@ -48,13 +80,13 @@ sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NU
 
    Handle user fields and extra content under that section's consent rules. Never complete a proposed edit while its answer is pending.
 
-5. **Check log integrity and schema definitions**, using the shipped read-only checker:
+5. **Check the log again**, now that the writes are done; the closing block reports this result:
 
 ```sh
 bash .claude/check-log.sh changes.db
 ```
 
-   If the checker or schema file is missing, report the check as unavailable and recommend `upgrade.sh`; never claim integrity ok without a successful check. Relay the checker's output and the recovery it names; never repair the live schema. On any error, do no further database writes.
+   If the check was unavailable in step 1, it still is: report it so and recommend `upgrade.sh`; never claim integrity ok without a successful check. Relay the checker's output and the recovery it names; never repair the live schema. On any error, do no further database writes.
 
 6. Write only changed project records. Do not stage or commit. If neither changed, do not rewrite either.
 

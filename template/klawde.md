@@ -77,7 +77,7 @@ sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NU
 
    Paste the measured total into the output; never tally it yourself. If the `concerns` table is absent on a pre-v3 schema, report `schema pre-v3 — run upgrade.sh` and continue; absent on a newer schema, it is damage: report it and stop.
 
-8. Compare the five entries against the brief. A purpose/scope contradiction or an unreflected `[scope]` or `[decision]` change stops entry: name the disagreement, recommend reconciling the brief or running `/close`, and omit "OK. Ready." The log never wins the disagreement. Work already beyond `Current focus` or `Next steps` is merely stale focus: note it and recommend `/close`, but continue.
+8. Compare the five entries against the brief. A purpose/scope contradiction or an unreflected `[scope]` or `[decision]` change stops entry: name the disagreement, recommend reconciling the brief or running `/close`, and omit "OK. Ready." The log never wins the disagreement. An entry that a later tail line supersedes (that line carries `supersedes=NNN`) is resolved history: compare the superseding entry against the brief, never the superseded one. Work already beyond `Current focus` or `Next steps` is merely stale focus: note it and recommend `/close`, but continue.
 
    Measure the brief:
 

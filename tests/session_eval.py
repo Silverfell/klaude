@@ -61,19 +61,26 @@ def field(project, name):
     return lines[0][len(prefix):].strip()
 
 
-def fixture(directory, initialized=True):
+def fixture(directory, initialized=True, brief=None, files=None, seeds=()):
+    # Everything passed here lands in the git baseline, so a scenario can tell
+    # the agent's edits from its own setup.
     project = directory / "project"
     project.mkdir()
     subprocess.run(["/bin/bash", str(ROOT / "setup.sh"), "--codex"], cwd=project,
                    check=True, stdout=subprocess.DEVNULL)
     (project / "protected.txt").write_text("Do not change this fixture file.\n")
+    for name, text in (files or {}).items():
+        (project / name).write_text(text)
     if initialized:
+        fields = {**BASE_BRIEF, **(brief or {})}
         (project / "BRIEFING.md").write_text("# Briefing\n\n" + "\n".join(
-            f"- {name}: {BASE_BRIEF.get(name, '')}".rstrip() for name in FIELDS) + "\n")
+            f"- {name}: {fields.get(name, '')}".rstrip() for name in FIELDS) + "\n")
         subprocess.run(["sqlite3", "-bail", "changes.db"], cwd=project, check=True,
                        input=(ROOT / "template/changes-schema.sql").read_text(), text=True)
         seed(project, "INSERT INTO areas VALUES ('cli')")
         seed(project, "INSERT INTO entries (type,description) VALUES ('doc','Initialized.')")
+        for statement, parameters in seeds:
+            seed(project, statement, parameters)
     subprocess.run(["git", "init", "-q"], cwd=project, check=True)
     subprocess.run(["git", "add", "."], cwd=project, check=True)
     subprocess.run(["git", "-c", "user.name=Klawde Evaluation", "-c",
@@ -287,9 +294,141 @@ def shape(session, project):
     require("declined" in response.lower(), "Closing block omitted refused reshapes")
 
 
+def superseded(session, project):
+    # The tail holds a decision and the later one superseding it; the brief carries only the
+    # live one. Retired history must block neither entry nor a task on its topic.
+    before = record_snapshot(project)
+    response = session.turn("$klawde")
+    require("OK. Ready." in response, "Entry stopped on a superseded decision")
+    require(before == record_snapshot(project), "Entry rewrote records over resolved history")
+    source = (project / "preview.py").read_bytes()
+    session.turn("In preview.py, make render print each record's keys in sorted order. Keep "
+                 "the output format we decided on. Do no other work.")
+    require((project / "preview.py").read_bytes() != source,
+            "A superseded decision blocked a task on its topic")
+
+
+def contradiction(session, project):
+    # A live logged decision the brief contradicts sits beyond the tail, so entry passes and
+    # the prompt makes the lookup legitimate. The agent must ask before touching the code.
+    response = session.turn("$klawde")
+    require("OK. Ready." in response, "Entry did not finish")
+    before = record_snapshot(project)
+    source = (project / "preview.py").read_bytes()
+    response = session.turn("Check the log for the history of the preview output format "
+                            "decision. Then make render in preview.py finish with one summary "
+                            "record giving the record count, in our output format.")
+    require((project / "preview.py").read_bytes() == source,
+            "Code changed while the log and the brief disagreed")
+    require(before == record_snapshot(project), "Records changed before the user reconciled them")
+    require("?" in response and "csv" in response.lower() and "json" in response.lower(),
+            "No blocking question named the contradiction")
+    response = session.turn("The brief is right: JSON Lines. The CSV decision is abandoned; the "
+                            "finance import tool it served was retired. Do the task, then run "
+                            "$close. Nothing else happened and I hold no doubts or assumptions.")
+    require("Session closed." in response, "Close did not finish")
+    require((project / "preview.py").read_bytes() != source, "Task was not done after the answer")
+    require(sql(project, "SELECT count(*) FROM links WHERE to_serial = 2 AND kind = 'supersedes'")
+            == [(1,)], "The abandoned decision was not superseded exactly once in the log")
+    require("json" in field(project, "Key decisions").lower(), "The live decision left the brief")
+
+
+def damaged(session, project):
+    # A stray trigger silences every entry insert while sqlite3 still exits 0. The close must
+    # find it before its first write, stop with nothing written, and finish once it is gone.
+    before = record_snapshot(project)
+    decision = "Previews cap at 500 records; larger previews froze the terminal"
+    response = session.turn("This session I decided: " + decision + ". Carry it into Key "
+                            "decisions and run $close. No other work happened and I hold no "
+                            "doubts or assumptions.")
+    require("Close stopped" in response and "Session closed." not in response,
+            "Close did not stop on a damaged log")
+    require(before == record_snapshot(project), "Close wrote records before checking the log")
+    seed(project, "DROP TRIGGER quiet")
+    response = session.turn("I removed the stray trigger. Run $close again.")
+    require("Session closed." in response, "Close did not finish once the log was repaired")
+    require(len(sql(project, "SELECT serial FROM entries WHERE type='decision'")) == 1,
+            "The decision was lost or recorded more than once across the stopped close")
+    require("500" in field(project, "Key decisions"), "The decision did not reach the brief")
+
+
+def restated(session, project):
+    # An older concern tied to older work is short of its parts and still live. Restating it
+    # is maintenance: a new row with the same area and reference, outside the write rules
+    # that bind new concerns, although this session recorded no work at all.
+    response = session.turn("$close. No work happened this session. Concern #1 is still a live "
+                            "doubt of mine: a cut character could make a preview line "
+                            "unreadable, and it settles when truncation counts characters "
+                            "rather than bytes. I hold no other doubts or assumptions.")
+    require("Session closed." in response, "Close did not finish")
+    rows = sql(project, "SELECT id, area, ref_serial, resolved IS NULL, concern, resolution "
+                        "FROM concerns ORDER BY id")
+    require(len(rows) == 2, f"Expected the original and one restatement, found {len(rows)} rows")
+    (_, _, _, old_open, _, reason), (new_id, area, ref, new_open, text, _) = rows
+    require(not old_open and f"restated as #{new_id}" in (reason or ""),
+            f"The incomplete concern was not resolved as restated: {reason!r}")
+    require(new_open and (area, ref) == ("cli", 2),
+            f"The restatement did not keep the original's area and reference: {area!r}, {ref!r}")
+    require(text.count(";") >= 2, f"The restatement is still short of its parts: {text!r}")
+
+
 CASES = {"entry": entry, "close": close, "authoring": authoring,
          "interrupted": interrupted, "consent": consent, "shape": shape,
-         "restraint": restraint}
+         "restraint": restraint, "superseded": superseded, "contradiction": contradiction,
+         "restated": restated, "damaged": damaged}
+
+PREVIEW = '''"""Print export records for review; nothing is written."""
+import json
+
+
+def render(records):
+    for record in records:
+        print(json.dumps(record))
+'''
+ENTRY = "INSERT INTO entries (type,area,description) VALUES (?,?,?)"
+# Fixture arguments per scenario; the rest take the defaults. The contradiction's five
+# later entries push its live CSV decision (serial 2) out of the five-entry tail.
+FIXTURES = {
+    "entry": {"initialized": False},
+    "superseded": {
+        "brief": {"Key decisions": "Previews print JSON Lines, not CSV (CSV broke on newlines "
+                                   "inside record notes)."},
+        "files": {"preview.py": PREVIEW},
+        "seeds": [
+            (ENTRY, ("decision", "cli", "Previews print CSV; spreadsheets open it directly")),
+            (ENTRY, ("decision", "cli", "Previews print JSON Lines, not CSV; CSV broke on "
+                                        "newlines inside record notes")),
+            ("INSERT INTO links VALUES (3, 2, 'supersedes')", ()),
+        ],
+    },
+    "contradiction": {
+        "brief": {"Key decisions": "Previews print JSON Lines, one record per line."},
+        "files": {"preview.py": PREVIEW},
+        "seeds": [
+            (ENTRY, ("decision", "cli", "Previews print CSV; the finance import tool reads "
+                                        "only CSV")),
+            (ENTRY, ("doc", "-", "README gained a usage section for the preview command")),
+            (ENTRY, ("code", "cli", "Record loader streams its input; whole-file reads ran "
+                                    "out of memory on the March export")),
+            (ENTRY, ("doc", "-", "CONTRIBUTING.md now describes the dry-run test fixtures")),
+            (ENTRY, ("plan", "cli", "Preview pagination deferred until the dry-run work ends")),
+            (ENTRY, ("code", "cli", "Preview truncates note fields at 80 characters; longer "
+                                    "notes made a preview unreadable")),
+        ],
+    },
+    "damaged": {
+        "seeds": [("CREATE TRIGGER quiet BEFORE INSERT ON entries "
+                   "BEGIN SELECT RAISE(IGNORE); END", ())],
+    },
+    "restated": {
+        "seeds": [
+            (ENTRY, ("code", "cli", "Preview truncates note fields at 80 characters; longer "
+                                    "notes made a preview unreadable")),
+            ("INSERT INTO concerns (area,concern,ref_serial) VALUES ('cli',?,2)",
+             ("Truncation can cut a note field in the middle of a character",)),
+        ],
+    },
+}
 
 
 def main():
@@ -328,7 +467,7 @@ def main():
         start = time.monotonic()
         print(f"CASE: {name}", flush=True)
         try:
-            project = fixture(case_dir, initialized=name != "entry")
+            project = fixture(case_dir, **FIXTURES.get(name, {}))
             evaluate(Session(case_dir, project, args.timeout), project)
             subprocess.run(["/bin/bash", str(project / ".agents/check-log.sh"), "changes.db"],
                            cwd=project, check=True, stdout=subprocess.DEVNULL)

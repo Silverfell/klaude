@@ -42,6 +42,10 @@ blocks; it never substitutes a simulated agent for the real conversation.
 | `consent` | Finish the close without waiting, propose a promotion as a question without applying it, ignore a vague "ok", then apply a named approval exactly and honor a keep-open disposition. |
 | `shape` | Restore an oversized maintained field while preserving declined user-field reshapes and extra content; paste the actual measured shape. |
 | `restraint` | Write no concern during a task turn, and none at close when the user holds no doubt. |
+| `damaged` | Find a stray insert-silencing trigger before the first write, stop with both records untouched, then finish once it is removed and record the decision exactly once. |
+| `restated` | Restate an older, still-live concern short of its parts as one new row keeping the original's area and log reference, resolve the original as restated, in a session that recorded no work. |
+| `superseded` | Finish entry although the tail holds a superseded decision the brief no longer carries, then do a task on that topic without reopening it. |
+| `contradiction` | After a directed log lookup finds a live decision the brief contradicts, ask a blocking question with code and records untouched; once the user answers, do the task and supersede the old decision at close. |
 
 Every turn also checks that the protected fixture file survives and the agent
 neither stages nor commits changes. Every successful scenario finishes by running

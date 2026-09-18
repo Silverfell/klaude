@@ -144,7 +144,7 @@ check "S5 close.md matches template" cmp -s "$KLAWDE/template/close.md" "$d/.cla
 check "S5 schema installed" cmp -s "$KLAWDE/template/changes-schema.sql" "$d/.claude/changes-schema.sql"
 check "S5 source version printed" grepq 'source version: ' "$BASE/s5.out"
 check "S5 restart note printed" grepq 'restart it' "$BASE/s5.out"
-check "S5 Code craft restore note printed for a contract without the section" grepq 'no Code craft section' "$BASE/s5.out"
+check "S5 an unrecognized contract without Code craft gets the section, and the note says so" grepq 'had no Code craft section; the upgrade installed it' "$BASE/s5.out"
 d="$BASE/s5c"; mkdir -p "$d/.agents/skills"; echo "OLD AGENTS" > "$d/AGENTS.md"
 echo "OLD schema" > "$d/.agents/changes-schema.sql"   # klawde artifact: no foreign-AGENTS.md prompt
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
@@ -163,6 +163,59 @@ d="$(mkfx s5d)"
 out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --backup 2>&1)"; rc=$?
 n="$(ls "$d" "$d/.claude/commands" | grep -c '\.bak\.')"
 check "S5 --backup completes with .bak files" bash -c "test $rc -eq 0 && test $n -ge 3"
+
+echo "=== S5e: a removed Code craft section stays out across upgrades, judged per layout ==="
+# The expected contract is built apart from upgrade.sh's own strip: delete from
+# the Code craft heading up to the Tools heading, by line number.
+without_craft() { # <contract> -> stdout
+  local a b
+  a="$(grep -n '^### Code craft' "$1" | cut -d: -f1)"
+  b="$(grep -n '^### Tools$' "$1" | cut -d: -f1)"
+  sed "${a},$((b - 1))d" "$1"
+}
+check "S5e the template carries both headings the recognition rule reads" \
+  bash -c "grep -q '^## Deviations\$' '$KLAWDE/template/CLAUDE.md' && grep -q '^### Code craft' '$KLAWDE/template/CLAUDE.md'"
+without_craft "$KLAWDE/template/CLAUDE.md" > "$BASE/s5e.expected"
+check "S5e the expectation lacks the section and keeps its neighbours" \
+  bash -c "! grep -q '^### Code craft' '$BASE/s5e.expected' && grep -q '^### Code\$' '$BASE/s5e.expected' && grep -q '^### Tools\$' '$BASE/s5e.expected'"
+d="$BASE/s5e"; mkdir -p "$d"
+(cd "$d" && "$KLAWDE/setup.sh" --both >/dev/null 2>&1)
+cp "$d/AGENTS.md" "$BASE/s5e-agents.full"
+{ cat "$BASE/s5e.expected"; echo "STALE LINE"; } > "$d/CLAUDE.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --both --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s5e.out"
+check "S5e exit 0" test "$rc" -eq 0
+check "S5e CLAUDE.md is the template minus exactly the Code craft section" cmp -s "$BASE/s5e.expected" "$d/CLAUDE.md"
+check "S5e kept-out note printed once, for CLAUDE.md only" \
+  bash -c "test \"\$(grep -c 'the upgrade kept it out' '$BASE/s5e.out')\" -eq 1 && grep -q 'CLAUDE.md had no Code craft section' '$BASE/s5e.out'"
+check "S5e AGENTS.md, which kept the section, is the full Codex contract" cmp -s "$BASE/s5e-agents.full" "$d/AGENTS.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --both --no-backup 2>&1)"; rc=$?
+check "S5e a second upgrade leaves the contract byte-identical" bash -c "test $rc -eq 0 && cmp -s '$BASE/s5e.expected' '$d/CLAUDE.md'"
+
+d="$BASE/s5f"; mkdir -p "$d"
+(cd "$d" && "$KLAWDE/setup.sh" --codex >/dev/null 2>&1)
+without_craft "$d/AGENTS.md" > "$BASE/s5f.expected"
+{ cat "$BASE/s5f.expected"; echo "STALE LINE"; } > "$d/AGENTS.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --codex --no-backup 2>&1)"; rc=$?
+check "S5f codex exit 0" test "$rc" -eq 0
+check "S5f AGENTS.md is the Codex contract minus exactly the Code craft section" cmp -s "$BASE/s5f.expected" "$d/AGENTS.md"
+check "S5f AGENTS.md keeps its title" grepq '^# AGENTS.md$' "$d/AGENTS.md"
+
+d="$BASE/s5g"; mkdir -p "$d"
+(cd "$d" && "$KLAWDE/setup.sh" --claude >/dev/null 2>&1)
+{ cat "$BASE/s5e.expected"; echo "STALE LINE"; } > "$d/CLAUDE.md"
+cp "$d/CLAUDE.md" "$BASE/s5g.before"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --backup 2>&1)"; rc=$?
+check "S5g --backup exit 0, section still kept out" bash -c "test $rc -eq 0 && cmp -s '$BASE/s5e.expected' '$d/CLAUDE.md'"
+check "S5g the one contract backup is the pre-upgrade contract" \
+  bash -c "test \"\$(ls '$d'/CLAUDE.md.bak.* | wc -l)\" -eq 1 && cmp -s '$BASE/s5g.before' '$d'/CLAUDE.md.bak.*"
+
+# The same shape with no klawde files beside it is not recognized: it may be foreign.
+d="$BASE/s5h"; mkdir -p "$d"; cp "$BASE/s5e.expected" "$d/CLAUDE.md"
+out="$(cd "$d" && printf 'y\n' | "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+echo "$out" > "$BASE/s5h.out"
+check "S5h a lone contract of that shape gets the full template" bash -c "test $rc -eq 0 && cmp -s '$KLAWDE/template/CLAUDE.md' '$d/CLAUDE.md'"
+check "S5h and the note says the section was installed" grepq 'the upgrade installed it' "$BASE/s5h.out"
 
 echo "=== S6: setup.sh fresh installs + guards ==="
 d="$BASE/s6"; mkdir -p "$d"
@@ -607,10 +660,30 @@ check "S38 schema identical to a fresh install" same_as_fresh "$d/changes.db"
 check "S38 every row survives unchanged" test "$before" = "$(sqlite3 -readonly "$d/changes.db" "$rows")"
 check "S38 open concerns reported with the untied count" grepq '2 open concern(s), 1 without a log reference' "$BASE/s38.out"
 # The retire statement close.md ships must touch only open rows without a reference.
-retire="$(sed -n '/^UPDATE concerns SET resolved/p' "$KLAWDE/template/close.md")"
+retire="$(sed -n '/^UPDATE concerns SET resolved.*ref_serial IS NULL;$/p' "$KLAWDE/template/close.md")"
 check "S38 close.md ships one retire statement" test "$(printf '%s\n' "$retire" | grep -c .)" -eq 1
 check "S38 the retire statement resolves only untied open rows" \
   bash -c "sqlite3 '$d/changes.db' \"$retire\" && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT count(*) FROM concerns WHERE resolved IS NULL;')\" = 1 && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT id FROM concerns WHERE resolved IS NULL;')\" = 2 && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT resolution FROM concerns WHERE id=3;')\" = done"
+
+echo "=== S39: /close checks the log before its first write, and again after its last ==="
+# A damaged schema can silence an insert or accept one it should refuse, so the
+# order of the commands close.md ships is part of the protocol.
+s39_line() { grep -n "$1" "$KLAWDE/template/close.md" | cut -d: -f1 | "$2" -1; }
+first_check="$(s39_line '^bash \.claude/check-log\.sh' head)"; last_check="$(s39_line '^bash \.claude/check-log\.sh' tail)"
+first_write="$(s39_line '^sqlite3 -bail' head)"; last_write="$(s39_line '^sqlite3 -bail' tail)"
+check "S39 close.md ships database writes and two checker runs" \
+  bash -c "test -n '$first_write' && test \"\$(grep -c '^bash \\.claude/check-log\\.sh' '$KLAWDE/template/close.md')\" -eq 2"
+check "S39 the first checker run precedes the first write" test "${first_check:-0}" -lt "${first_write:-0}"
+check "S39 the last checker run follows the last write" test "${last_check:-0}" -gt "${last_write:-0}"
+# What the early check exists for: both failures exit 0 and only the checker sees them.
+d="$BASE/s39"; mkdir -p "$d"
+for c in silenced unguarded; do sqlite3 "$d/$c.db" < "$KLAWDE/template/changes-schema.sql"; done
+sqlite3 "$d/silenced.db" "CREATE TRIGGER quiet BEFORE INSERT ON entries BEGIN SELECT RAISE(IGNORE); END;"
+sqlite3 "$d/unguarded.db" "DROP TRIGGER entries_one_line;"
+check "S39 a silenced insert exits 0 and records nothing; the checker refuses that log" \
+  bash -c "sqlite3 -bail '$d/silenced.db' \"INSERT INTO entries (type,description) VALUES ('decision','lost');\" && test \"\$(sqlite3 -readonly '$d/silenced.db' 'SELECT count(*) FROM entries;')\" = 0 && ! bash '$KLAWDE/template/check-log.sh' '$d/silenced.db' '$KLAWDE/template/changes-schema.sql' >/dev/null 2>&1"
+check "S39 an unguarded log accepts a two-line entry for good; the checker refuses that log" \
+  bash -c "sqlite3 -bail '$d/unguarded.db' \"INSERT INTO entries (type,description) VALUES ('note','one'||char(10)||'two');\" && test \"\$(sqlite3 -readonly '$d/unguarded.db' 'SELECT count(*) FROM entries;')\" = 1 && ! bash '$KLAWDE/template/check-log.sh' '$d/unguarded.db' '$KLAWDE/template/changes-schema.sql' >/dev/null 2>&1"
 
 echo "=== S35: every shipped script parses ==="
 # bash -n takes one script; each is verified on its own.

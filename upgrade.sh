@@ -234,13 +234,6 @@ maybe_backup() {
   fi
 }
 
-# The contract's Code craft section is optional; say so when the overwrite restores it.
-note_code_craft() {
-  if [ -f "$1" ] && ! grep -q '^### Code craft' "$1"; then
-    echo "Note: $(basename "$1") has no Code craft section; the upgrade restores it. Delete the section again if you do not want it."
-  fi
-}
-
 overwrite() { # <src> <dst>
   if [ -f "$2" ]; then maybe_backup "$2"; fi
   mkdir -p "$(dirname "$2")"
@@ -248,9 +241,40 @@ overwrite() { # <src> <dst>
   echo "Overwrote $2."
 }
 
+# The contract's Code craft section is optional. One shape is recognized as a
+# contract that had it removed: klawde files beside it, a "## Deviations" line
+# (the heading that shipped together with the section) and no "### Code craft"
+# heading. That is a recognition rule, not proof of intent, so either outcome
+# is reported whenever the section was absent before the upgrade.
+craft_absent() { # <installed contract>
+  [ -f "$1" ] && ! grep -q '^### Code craft' "$1"
+}
+craft_removed() { # <installed contract> <klawde files beside it 0|1>
+  [ "$2" -eq 1 ] && craft_absent "$1" && grep -q '^## Deviations$' "$1"
+}
+strip_code_craft() {
+  awk '/^### Code craft/ { skip = 1; next } skip && /^##/ { skip = 0 } !skip'
+}
+write_contract() { # <dst> <claude|codex> <klawde files beside it 0|1>
+  local dst="$1" absent=0 keep_out=0
+  if craft_absent "$dst"; then absent=1; fi
+  if craft_removed "$dst" "$3"; then keep_out=1; fi
+  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
+  if [ "$2" = "codex" ]; then
+    rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md"
+  else
+    cat "$SCRIPT_DIR/template/CLAUDE.md"
+  fi | if [ "$keep_out" -eq 1 ]; then strip_code_craft; else cat; fi > "$dst"
+  echo "Overwrote $dst."
+  if [ "$keep_out" -eq 1 ]; then
+    echo "Note: $(basename "$dst") had no Code craft section; the upgrade kept it out. Copy the section from $SCRIPT_DIR/template/CLAUDE.md to restore it."
+  elif [ "$absent" -eq 1 ]; then
+    echo "Note: $(basename "$dst") had no Code craft section; the upgrade installed it. Delete the section if you do not want it; later upgrades keep it out."
+  fi
+}
+
 upgrade_claude() {
-  note_code_craft "$TARGET_DIR/CLAUDE.md"
-  overwrite "$SCRIPT_DIR/template/CLAUDE.md" "$TARGET_DIR/CLAUDE.md"
+  write_contract "$TARGET_DIR/CLAUDE.md" claude "$claude_artifacts"
   for cmd in klawde.md close.md; do
     overwrite "$SCRIPT_DIR/template/$cmd" "$TARGET_DIR/.claude/commands/$cmd"
   done
@@ -269,11 +293,7 @@ upgrade_skill() { # <name> <template file> <description>
 }
 
 upgrade_codex() {
-  local dst="$TARGET_DIR/AGENTS.md"
-  note_code_craft "$dst"
-  if [ -f "$dst" ]; then maybe_backup "$dst"; fi
-  rewrite_codex "$SCRIPT_DIR/template/CLAUDE.md" > "$dst"
-  echo "Overwrote $dst."
+  write_contract "$TARGET_DIR/AGENTS.md" codex "$codex_artifacts"
   upgrade_skill klawde klawde.md "$KLAWDE_SKILL_DESC"
   upgrade_skill close close.md "$CLOSE_SKILL_DESC"
   for artifact in changes-schema.sql check-log.sh; do

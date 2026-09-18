@@ -16,15 +16,13 @@ These four properties govern every protocol:
 3. **Tailed, not read.** Read exactly the last five entries at session start. Query older entries only for a specific question. Never dump history for context, and never propose pruning, compaction or archival; the log has no ceiling.
 4. **Not authoritative.** The log records what happened, never what is true now or what to do next. A disagreement with the brief calls for reconciliation, not obedience to the log.
 
-Every read uses `-readonly`; a failed query is diagnosed, never treated as an empty result. Every write uses the forms in Documentation Updates.
+Every read uses `-readonly`; a failed query is diagnosed, never treated as an empty result. Every write uses the forms in Documentation Updates; concern writes use the forms in `.claude/commands/close.md`.
 
 If either project record is missing, read-only questions may be answered freely. A small edit to one existing file, creating none, may proceed with "No session docs found; run `/klawde` to enable continuity". Before larger work, ask the user to run `/klawde`. The entry protocol itself is exempt because it creates these files.
 
 ### The concerns table
 
-A concern is a doubt about work this session changed that reading the files could not settle, expressed in three parts on one line separated by semicolons: **what you saw; what it may break or leaves undecided; what settles it**. It is written only at `/close`, at most three per close, and its `ref_serial` names this session's log entry for that work: no entry, no concern. The consequence may be a guess, labeled as such when presented.
-
-Refused at authoring time, each for what it lacks: `Export worker is not idempotent` — a bare fact, nothing it breaks; `Retry logic might be flaky` — a worry, nothing seen; `Should dry-run write an audit file?` — a question with no stake, and the user's field, not yours; `Add backoff cap` — a task, so `Next steps`; `Retry suite 40/40 green` — a receipt, banned everywhere; `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts wearing semicolons; `Legacy importer has no tests; a refactor could break it; settles when tests exist` — about code this session did not change, so not yours to park.
+A concern is a doubt about work a session changed that reading the files could not settle, expressed in three parts on one line separated by semicolons: **what you saw; what it may break or leaves undecided; what settles it**. For example: `Export worker is not idempotent; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry`. The consequence may be a guess, labeled as such when presented. A concern is written only at `/close`, under that protocol's rules.
 
 Concerns are born open, their text is immutable, resolution sets date and reason together once, and nothing is deleted. The table is read before a task (Decision Rules) and at `/close`, nowhere else.
 
@@ -77,7 +75,7 @@ A default in Scope, Code, Code craft, or Decision Rules may be deviated from whe
 
 These rules govern lines you write or modify; match the existing code style even where you would write it differently, and do not rewrite pre-existing violations elsewhere unless asked. Stack-specific rules (DOM) apply only when the project uses that stack.
 
-- Before creating a file, verify it does not exist. State what you checked.
+- Before creating a file, verify it does not exist.
 - Parameterize values that vary by environment rather than hardcoding. Never hardcode to mask a bug.
 - Sanitize before use: no unsanitized input in shell or process calls; no raw user input rendered into the DOM (use framework escaping).
 - Remove imports, variables, and functions your changes made unused. Leave pre-existing dead code unless asked.
@@ -90,17 +88,17 @@ Opinionated code-quality defaults. To drop them permanently, delete this whole s
 - Run independent async work concurrently. Sequential awaits are fine when the work is dependent or when ordering, rate limits, or backpressure require it.
 - Batch queries rather than issuing one per iteration, unless batching is infeasible (cursor pagination, variable batch sizes); then mark `REASON:`.
 - Keep types honest: fix the type rather than casting. If a third-party or mid-migration type genuinely cannot be fixed cheaply, use a localized cast marked `TYPE:`.
-- All migration files must be idempotent.
+- Migrations follow the project's migration tool and conventions; where nothing tracks which migrations have run, write them idempotent.
 - No abstractions for single-use code. No error handling for genuinely impossible states.
 
 ### Tools
 
 - Prefer locally installed CLI tools (psql, docker, gh) over MCP equivalents when available.
-- An equivalent tool substitution (grep for rg) is fine; note it. Do not switch the *approach* to the task to route around a missing tool. If something you genuinely need is missing, state what you need.
+- An equivalent tool substitution (grep for rg) is fine. Do not switch the *approach* to the task to route around a missing tool. If something you genuinely need is missing, state what you need.
 
 ### Architecture
 
-- Prefer simple solutions. Do not introduce infrastructure (orchestration, IaC, heartbeat tables, KEDA) unless the user asks. When in doubt, propose the simpler approach.
+- Prefer simple solutions. Do not introduce infrastructure the task does not require (new services, queues, schedulers, orchestration, infrastructure-as-code) unless the user asks. When in doubt, propose the simpler approach.
 
 ### Audits & reviews
 
@@ -115,9 +113,9 @@ Opinionated code-quality defaults. To drop them permanently, delete this whole s
   - A concern bears on the task when the deliverable depends on it. State it under the three lines as `Concern #N: <its text>`, as a parked doubt rather than a finding; omit the line when none does. It is not acted on unless the user says so. If its third part is a decision of the user's and the deliverable depends on it, it is a blocking question, asked with the others.
   - An item in the brief's `Open questions` on which the deliverable depends is likewise the user's blocking question, asked with the others. It is never settled by `ASSUMPTION:` and never restated as a concern.
   - When a line cannot be filled, first check whether the repo, `BRIEFING.md`, or a targeted log query fills it; asking the user something you could have looked up violates this contract. A gap only the user can close — intent, priorities, a trade-off between genuinely valid options, external context — is a blocking question: ask all such questions batched, wait, then proceed. Never fill a gate line by guessing intent.
-- **Below the gate, everything is minor**: once the three lines are stated, every remaining unknown — naming, formatting, defaults, a choice between equivalent approaches — is resolved by picking a reasonable option, marking `ASSUMPTION:`, and proceeding. Do not ask about these. A mid-task unknown reopens the gate only if it invalidates one of the three stated lines.
+- **Below the gate, everything is minor**: once the three lines are stated, every remaining unknown — naming, formatting, defaults, a choice between equivalent approaches — is resolved by picking a reasonable option and proceeding. Do not ask about these and do not label them: `ASSUMPTION:` marks an assumed fact (Deviations), never a choice. A mid-task unknown reopens the gate only if it invalidates one of the three stated lines.
 - **No acceptance criteria**: when intent is clear but no criterion was given, fill that gate line yourself: state "Acceptance test: [X]" and build to it. The missing criterion blocks only when intent itself is unclear.
-- **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, or found a case it does not cover, say so in one line and proceed under the existing decision unless the user overrules.
+- **Settled decisions**: a decision in the brief's `Key decisions` is not reopened. If you believe it is wrong, or found a case it does not cover, say so in one line and proceed under it unless the user overrules. The log never authorizes proceeding under a decision absent from the brief. If relevant history reveals an unresolved contradiction with the brief, raise it as a blocking question; a superseded decision is resolved history, not a contradiction.
 - **Multi-step task**: state a brief plan as `1. [step] → verify: [check]`, then implement, fixing your own failures as you go until each check passes.
 - **A check or command fails**:
   - If it failed because of the change you are making, fix it and continue. That is the loop.
@@ -164,21 +162,7 @@ Refused at authoring time, as `log_lines` would render them: `[code] (-) fixed b
 
 A bad entry is corrected by a later entry, with a supersession link where applicable. `legacy_summaries` holds immutable imports from the retired text log; query it only for a specific question reaching before migration.
 
-### Concern writes and reads
-
-At `/close`, open a concern under the rule in Project Records, read its id back, and resolve by setting date and reason together, once:
-
-```sh
-sqlite3 -bail changes.db <<'KLAWDE_SQL'
-INSERT INTO concerns (area, concern, ref_serial) VALUES ('queue','Export worker is not idempotent; a retried export may ship twice; settles when the worker is made idempotent or the user exempts it from retry',41);
-KLAWDE_SQL
-sqlite3 -readonly changes.db "SELECT line FROM concern_lines ORDER BY id DESC LIMIT 1;"
-sqlite3 -bail changes.db <<'KLAWDE_SQL'
-UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export worker made idempotent' WHERE id = 7;
-KLAWDE_SQL
-```
-
-Each CLI call is its own connection: `last_insert_rowid()` in a later call cannot identify an earlier insert; use the one-row read-back.
+### Concern and history reads
 
 Before a task, read the concerns for each area it touches and for `-`:
 

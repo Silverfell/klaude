@@ -29,7 +29,7 @@ Klawde is for people who already use Claude Code and want:
 
 | File | Purpose |
 |------|---------|
-| `template/CLAUDE.md` | Project rules, verification rules, output contract, plus an optional code-craft module (delete that section if you do not want it; `upgrade.sh` restores it and says so) |
+| `template/CLAUDE.md` | Project rules, verification rules, output contract, plus an optional code-craft module (delete that section if you do not want it; `upgrade.sh` keeps a removed section out and says so) |
 | `template/klawde.md` | `/klawde` command: reads or creates session documents at session start |
 | `template/close.md` | `/close` command: updates session records before ending work |
 | `template/changes-schema.sql` | The `changes.db` schema: the log tables with the triggers that enforce append-only immutability, the agent's `concerns` table with its one-way lifecycle, and the `log_lines`/`concern_lines` rendering views |
@@ -61,12 +61,12 @@ Run this at the end of a session. It is also safe to run mid-session as a checkp
 
 It makes Claude Code:
 
-1. read `BRIEFING.md` and the last 5 log entries
+1. read `BRIEFING.md` and the last 5 log entries, then run the read-only log checker before writing anything: a damaged schema can silence an insert or accept one the log should refuse, so on any checker error the close stops with nothing written and names the recovery
 2. review what changed in the session, consulting git to recover work that long sessions may have compacted out of context
 3. insert typed log entries for any unrecorded decisions, plans, docs, scope shifts, notes, or code that needs project-level explanation, and flag work that contradicts the brief's scope, non-goals, or do-not-touch list
-4. triage its open concerns: resolve with a recorded reason what the session settled, write at most three new ones about work this session changed, each tied to that work's log entry, and present what is still open with a proposed disposition (resolve, promote to your open questions as a decision question, or keep open); the close does not wait for your answer, keep open is the default, and an unconfirmed assumption with a nameable consequence is presented for confirmation and becomes a concern only if you defer it
+4. triage its open concerns: resolve with a recorded reason what the session settled, write at most three new ones about work this session changed, each tied to that work's log entry, and present what is still open with a proposed disposition (resolve, promote to your open questions as a decision question, or keep open), proposing promotion for any concern that waits on a decision of yours; the close does not wait for your answer, keep open is the default, and an unconfirmed assumption with a nameable consequence is presented for confirmation and becomes a concern only if you defer it
 5. update the brief's maintained fields (purpose, scope, decisions, non-goals, areas, breaking-change context, focus, next steps, environment quirks) and restore any that has grown past one line; your two fields, open questions and do-not-touch, change only on your explicit approval of a named proposal
-6. run the read-only log checker and relay its result
+6. run the log checker again, now that the writes are done, and relay its result
 7. measure the brief's shape and refuse to finish while any maintained field runs past one line, then print what was recorded, every field's measured line count, and the measured open-concern count
 
 ## The two core documents
@@ -152,7 +152,7 @@ Rendered through `concern_lines`, a concern and a non-concern look like this:
 2026-06-05 #12 (queue) Export worker is not idempotent
 ```
 
-The second is a fact with nothing it breaks and nothing that settles it; `/close` lists any open concern short of its three parts and has the agent restate or resolve it before triage.
+The second is a fact with nothing it breaks and nothing that settles it; `/close` lists any open concern short of its three parts and has the agent restate or resolve it before triage. A restatement is maintenance rather than a new concern: it keeps the original's area and log reference, replaces exactly that row, and does not count toward the three a close may write.
 
 Two rules keep the table honest. A concern is never authoritative: it is a note for a later session, never an instruction, and it never overrides the brief. And every concern has an outflow: a session starts by reading a per-area count of open concerns, before a task starts the agent reads the concerns for the areas that task touches and states any that bears on it, and `/close` presents every open one with a proposed disposition. The close does not wait for your answer; keep open is the default, a named answer afterwards is applied, and a concern written before the log-reference rule existed is retired at the next close.
 
@@ -217,7 +217,9 @@ To overwrite an existing installation with the latest defaults:
 
 With no target flag, the script detects the existing install from the root contracts and klawde's own harness files and offers it as the default; press Enter to accept. Another tool's `.agents/skills` does not count as a Codex install, and a `CLAUDE.md` or `AGENTS.md` with no klawde files beside it may be your own, so it is overwritten only after you confirm. If the chosen target leaves a detected install un-upgraded, the script says so. A project still carrying the retired text log `CHANGES.md` with no `changes.db` is refused: this version no longer migrates it, and the commit named in the message still does.
 
-It then asks whether to create `.bak` backups before overwriting; `--backup` and `--no-backup` skip that prompt. It overwrites the harness files, saying so when the overwrite restores a Code craft section you had deleted, and brings an existing `changes.db` to the shipped schema in place: the version is tracked by `PRAGMA user_version`, missing or changed triggers and views are restored from the shipped definitions in one transaction, existing rows are never touched, and the database is backed up first when backups are on. It refuses, before writing anything, a `changes.db` that is not a klawde log, one newer than the checkout supports, one with a missing or changed table (only git still holds the rows), and one carrying a trigger the shipped schema does not define, because such a trigger can make every `INSERT` succeed and record nothing. An extra table or view is reported and left alone. It ends by reporting how many concerns are open and how many of those carry no log reference, which the next `/close` retires.
+It then asks whether to create `.bak` backups before overwriting; `--backup` and `--no-backup` skip that prompt. It overwrites the harness files and brings an existing `changes.db` to the shipped schema in place: the version is tracked by `PRAGMA user_version`, missing or changed triggers and views are restored from the shipped definitions in one transaction, existing rows are never touched, and the database is backed up first when backups are on. It refuses, before writing anything, a `changes.db` that is not a klawde log, one newer than the checkout supports, one with a missing or changed table (only git still holds the rows), and one carrying a trigger the shipped schema does not define, because such a trigger can make every `INSERT` succeed and record nothing. An extra table or view is reported and left alone. It ends by reporting how many concerns are open and how many of those carry no log reference, which the next `/close` retires.
+
+The contract is always overwritten whole; the one thing carried over is the absence of its optional Code craft section. The upgrade recognizes one shape as a contract that had the section removed: klawde's files beside it, a `## Deviations` heading (which shipped together with the section) and no `### Code craft` heading. For that shape it installs the new contract without the section. This is a recognition rule, not a reading of your intent: an edited or foreign file of the same shape matches it, and a contract that lost both headings does not. Whenever the section was absent before the upgrade, the script therefore says which it did, kept it out or installed it, and either is undone by hand: copy the section from `template/CLAUDE.md`, or delete it. Each layout is judged by its own contract.
 
 The installed checker is also available independently:
 
