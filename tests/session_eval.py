@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""Opt-in live Codex evaluations of the installed protocols, using real files.
-
-No model calls run as part of verify.sh. This runner uses the local Codex login,
-normal workspace sandbox, and real resumed conversations. It never supplies a
-fake agent response or grades a simulated implementation of the protocols.
-"""
+"""Opt-in live Codex evaluations of the installed protocols, against real files
+and real resumed conversations; it never grades a simulated agent."""
 
 import argparse
 import json
@@ -184,9 +180,7 @@ def close(session, project):
 
 
 def authoring(session, project):
-    # A bare fact and a change with no project-level meaning. Neither may enter
-    # the records in the form it arrived in: the fact is either completed into
-    # three parts or not written, and the typo belongs in a commit message.
+    # A bare fact is completed into three parts or not written; a typo fix belongs in a commit message.
     response = session.turn(
         "Two things from this session. First: I noticed the export worker is not idempotent. "
         "That is all I have; I have not worked out what it would break. Second: I fixed a typo "
@@ -266,8 +260,7 @@ def shape(session, project):
             in brief.read_text(), "Declined user-field reshape was applied")
     require("## Notes\nKeep this user-authored note.\n" in brief.read_text(),
             "Declined extra-content removal was applied")
-    # Absent rather than exceptional: a reworded close.md must fail this case,
-    # not escape the runner's handler and abandon the scenarios after it.
+    # A reworded close.md must fail this case, not escape the runner's handler.
     measurement = next((line for line in (ROOT / "template/close.md").read_text().splitlines()
                         if line.startswith("awk ")), "")
     require(measurement, "close.md carries no shape measurement to run")

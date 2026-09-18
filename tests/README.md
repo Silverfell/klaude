@@ -4,19 +4,16 @@ Run the deterministic regression suite from the checkout:
 
 ```bash
 # bash -n takes one script; everything after the first is an argument to it.
-for f in setup.sh upgrade.sh template/check-log.sh tests/verify.sh; do
+for f in setup.sh upgrade.sh lib.sh template/check-log.sh tests/verify.sh; do
   /bin/bash -n "$f" || echo "SYNTAX ERROR in $f"
 done
 /bin/bash tests/verify.sh
 ```
 
 It requires Bash, Git, the SQLite CLI and standard Unix utilities. It builds
-temporary projects, runs the real installers, compares every upgraded schema
-with a fresh database, executes complete SQL examples (including heredocs), and
-injects backup/removal failures. It also covers archive collisions, contract hard
-links, altered trigger/view definitions, objects the shipped schema does not
-define, immutable rows, nullable references, literal shell metacharacters in
-authored log text, and the syntax of every shipped script. It makes no model calls.
+temporary projects, runs the real installers against them, compares every
+upgraded schema with a fresh database, and executes every SQL example the
+templates ship. It makes no model calls.
 
 ## Live session evaluations
 
@@ -28,18 +25,13 @@ python3 tests/session_eval.py --output-dir /tmp/klawde-evaluation
 ```
 
 These are opt-in evaluations using Python 3 and an installed, authenticated Codex
-CLI. They use the CLI's default model and normal workspace-write sandbox, with
-approval requests disabled. User config and execution rules are excluded for
-reproducibility; login credentials still come from the existing Codex runtime.
-Model calls require network access and consume the account's normal usage.
-Codex manages its own session storage as usual so follow-up turns can resume the
-same conversation. There is no bypass of the agent's sandbox.
+CLI, with its default model and normal workspace-write sandbox. Model calls
+require network access and consume the account's normal usage.
 
 Each scenario installs the generated Codex layout into a disposable project,
 initializes a local Git baseline, and interacts with the actual agent. The test
 process checks resulting database rows, file contents, measurements and response
-blocks. It never substitutes a simulated agent or an implementation of the
-protocol for the real conversation.
+blocks; it never substitutes a simulated agent for the real conversation.
 
 | Scenario | Required behavior |
 | --- | --- |
@@ -55,15 +47,12 @@ neither stages nor commits changes. Every successful scenario finishes by runnin
 the installed schema checker.
 
 Fixtures, prompts, final responses, JSONL events, stderr and `results.json` are
-retained in the printed artifact directory. An explicit output directory must
+retained in the printed artifact directory; an explicit output directory must
 not already exist. A timeout, runtime failure or failed assertion fails the
-evaluation; unavailable model access never counts as a pass. The default timeout
-is 240 seconds per turn and can be adjusted with `--timeout`.
-An account or runtime error stops the run; later scenarios are marked `not_run`
-instead of repeatedly calling an unavailable service. Rerun those cases after
-access is restored.
+evaluation, and unavailable model access never counts as a pass: an account or
+runtime error stops the run and marks later scenarios `not_run`. The default
+timeout is 240 seconds per turn (`--timeout`).
 
-These evaluations exercise Codex's installed skills. The shell suite verifies
-both installation layouts; live Claude Code behavior is not covered by this
-runner. Results are model-dependent, so report the actual scenarios and artifacts
-run rather than treating a single pass as a universal guarantee.
+These evaluations exercise Codex's installed skills; live Claude Code behavior
+is not covered. Results are model-dependent, so report the actual scenarios and
+artifacts run rather than treating a single pass as a universal guarantee.

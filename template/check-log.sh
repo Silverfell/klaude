@@ -18,13 +18,10 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 sqlite3 -bail "$scratch/expected.db" < "$schema"
-# Quote the path as SQL data. Expanding a variable does not evaluate any shell
-# syntax in its value; never build these commands with eval.
+# The path is quoted as SQL data; never build these commands with eval.
 expected_path="${scratch//\'/\'\'}/expected.db"
-# One line per difference, as object|name|status. The comparison runs both ways:
-# the first arm names what the shipped schema defines and this database lacks or
-# has altered, the second what this database carries and the schema never
-# defined. UNION ALL rather than FULL OUTER JOIN, which needs SQLite 3.39.
+# One line per difference, as object|name|status, in both directions. UNION ALL
+# rather than FULL OUTER JOIN, which needs SQLite 3.39.
 drift="$(sqlite3 -bail -readonly "$db" "
   ATTACH DATABASE '$expected_path' AS expected;
   SELECT e.type || '|' || e.name || '|'
@@ -46,14 +43,11 @@ if [ "$objects_only" -eq 1 ]; then
   exit 0
 fi
 
-# An object the shipped schema does not define is not always damage. An extra
-# table or view cannot weaken the log's guarantees, and a project may carry one
-# deliberately. An extra trigger can: a BEFORE INSERT trigger raising IGNORE
-# makes every INSERT succeed and record nothing, which no protocol could see.
+# An extra table or view cannot weaken the log; an extra trigger can (a BEFORE
+# INSERT trigger raising IGNORE silences every insert), so only the latter is damage.
 damage="$(printf '%s\n' "$drift" | awk -F'|' 'NF == 3 && ($3 != "unexpected" || $1 == "trigger")')"
 extra="$(printf '%s\n' "$drift" | awk -F'|' 'NF == 3 && $3 == "unexpected" && $1 != "trigger"')"
-# What upgrade.sh cannot put back: it never rebuilds a table, because only git
-# still holds the rows one had, and it never removes an object it does not ship.
+# upgrade.sh never rebuilds a table (only git holds its rows) or removes an object it does not ship.
 unrepairable="$(printf '%s\n' "$damage" | awk -F'|' 'NF == 3 && ($1 == "table" || $3 == "unexpected")')"
 
 version="$(sqlite3 -readonly "$db" 'PRAGMA user_version;')"

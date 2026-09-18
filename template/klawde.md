@@ -4,7 +4,7 @@ Run at session start. Complete this protocol before any other task, then stop. T
 
 ## Steps
 
-1. Run `ls BRIEFING.md changes.db 2>/dev/null` and note which files exist. Run `command -v sqlite3`; if missing, stop and request installation of the SQLite CLI. Run `git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git status --porcelain`: distinguish a non-repository from a clean one, and note pre-existing changes. Dirty state never blocks entry.
+1. Run `ls BRIEFING.md changes.db 2>/dev/null` and note which files exist. Run `command -v sqlite3`; if missing, stop and request installation of the SQLite CLI. Run `git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git status --porcelain`, noting a non-repository; dirty state never blocks entry.
 
 2. If `BRIEFING.md` is missing, create the empty form below. The example shows the required concise shape; its project details are examples, not defaults.
 
@@ -42,9 +42,7 @@ Run at session start. Complete this protocol before any other task, then stop. T
 - Environment quirks: Shopify sandbox throttles hard after ~50 req/min.
 ```
 
-   Preserve the user's ownership of `Open questions` and `Do-not-touch` as defined in Briefing maintenance.
-
-3. If `changes.db` is missing, first confirm `.claude/changes-schema.sql` exists. If absent, stop and recommend `upgrade.sh` from the klawde checkout. Never invent the schema or run an insert against an uninitialized database. Create it and its first entry:
+3. If `changes.db` is missing, first confirm `.claude/changes-schema.sql` exists; if absent, stop and recommend `upgrade.sh` from the klawde checkout. Create the database and its first entry:
 
 ```sh
 sqlite3 -bail changes.db < .claude/changes-schema.sql
@@ -77,7 +75,7 @@ sqlite3 -readonly changes.db "SELECT area, count(*) FROM concerns WHERE resolved
 sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NULL;"
 ```
 
-   These are the entire session-start database reads. No older-history skim, concern texts, or triage. Paste the measured total into the output; never tally it yourself. If concerns are absent on a pre-v3 schema, report `schema pre-v3 — run upgrade.sh` and continue without altering the schema. A missing table on a newer schema is damage, not an older version: report it and stop. Diagnose a failed query instead of treating it as an empty result.
+   Paste the measured total into the output; never tally it yourself. If the `concerns` table is absent on a pre-v3 schema, report `schema pre-v3 — run upgrade.sh` and continue; absent on a newer schema, it is damage: report it and stop.
 
 8. Compare the five entries against the brief. A purpose/scope contradiction or an unreflected `[scope]` or `[decision]` change stops entry: name the disagreement, recommend reconciling the brief or running `/close`, and omit "OK. Ready." The log never wins the disagreement. Work already beyond `Current focus` or `Next steps` is merely stale focus: note it and recommend `/close`, but continue.
 
@@ -87,9 +85,9 @@ sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NU
 awk 'BEGIN { printf "Shape:" } /^#/ && f != "" && f != "Trailing" { printf "%s %s %d", s, f, n; s = ","; f = "Trailing"; n = 0 } /^[-*][[:space:]]+[^:]+:/ && f != "Trailing" { if (f != "") { printf "%s %s %d", s, f, n; s = "," } f = $0; sub(/:.*/, "", f); sub(/^[-*][[:space:]]+/, "", f); sub(/[[:space:]]+$/, "", f); n = 0 } NF { n++ } END { if (f != "") printf "%s %s %d", s, f, n; print "" }' BRIEFING.md
 ```
 
-   Each `Field N` gives its nonblank line count. Expect the eleven template names once each, normally all 1. A duplicate maintained field, count above 1, or history disguised as one line is a violation: report fields and counts, recommend `/close`, and stop without the Ready block. Do not repair it here; closing preserves unrecorded history before reshaping.
+   Each `Field N` gives its nonblank line count. Expect the eleven template names once each, all 1. A duplicate maintained field, a count above 1, or history disguised as one line is a violation: report fields and counts, recommend `/close`, and stop without the Ready block. Do not repair it here.
 
-   User fields over one line, foreign fields, and `Trailing` content are reported on the `BRIEFING.md` line, not repaired and not blocking. Interpret bullets belonging to user fields as the contract specifies. Text after the last field counts into it unless a heading makes it `Trailing`.
+   User fields over one line, foreign fields, and `Trailing` content are reported on the `BRIEFING.md` line, not repaired and not blocking.
 
 9. If no check stopped entry, output this format, then stop:
 
@@ -101,5 +99,3 @@ Focus: <Current focus and Next steps | unset | stale: reason>
 Concerns: <N open: <area> N, <area> N | none | schema pre-v3 — run upgrade.sh>
 Dirty: <uncommitted files found in step 1 | clean | not a git repo>
 ```
-
-   After the block, add a line if dirty files appear to be unfinished focus/next-step work. Add a line if `Open questions` contains a finding or fact instead of a question; only the user can authorize its removal. Empty is valid.
