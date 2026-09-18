@@ -22,13 +22,11 @@ If either project record is missing, read-only questions may be answered freely.
 
 ### The concerns table
 
-A concern is a doubt about the project, expressed in three parts on one line separated by semicolons: **what you saw; what it may break or leaves undecided; what settles it**. The consequence may be a guess, labeled as such when presented. Semicolons alone do not make three facts a concern.
+A concern is a doubt about work this session changed that reading the files could not settle, expressed in three parts on one line separated by semicolons: **what you saw; what it may break or leaves undecided; what settles it**. It is written only at `/close`, at most three per close, and its `ref_serial` names this session's log entry for that work: no entry, no concern. The consequence may be a guess, labeled as such when presented.
 
-Read the open concerns for the area and `-` before opening one, so it is not duplicated.
+Refused at authoring time, each for what it lacks: `Export worker is not idempotent` — a bare fact, nothing it breaks; `Retry logic might be flaky` — a worry, nothing seen; `Should dry-run write an audit file?` — a question with no stake, and the user's field, not yours; `Add backoff cap` — a task, so `Next steps`; `Retry suite 40/40 green` — a receipt, banned everywhere; `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts wearing semicolons; `Legacy importer has no tests; a refactor could break it; settles when tests exist` — about code this session did not change, so not yours to park.
 
-Refused at authoring time, each for the part it lacks: `Export worker is not idempotent` — a bare fact, nothing it breaks; `Retry logic might be flaky` — a worry, nothing seen; `Should dry-run write an audit file?` — a question with no stake, and the user's field, not yours; `Add backoff cap` — a task, so `Next steps`; `Retry suite 40/40 green` — a receipt, banned everywhere; `batchSize is 500; the worker runs hourly; retries cap at 3` — three facts wearing semicolons.
-
-Concerns are born open, their text is immutable, resolution sets date and reason together once, and nothing is deleted. The only reads of the table are the pre-task read (Decision Rules), the one-row id read-back after an insert, and `/close` triage.
+Concerns are born open, their text is immutable, resolution sets date and reason together once, and nothing is deleted. The table is read before a task (Decision Rules) and at `/close`, nowhere else.
 
 ---
 
@@ -47,7 +45,7 @@ When rules conflict, resolve in this order, never silently:
 
 A default in Scope, Code, Code craft, or Decision Rules may be deviated from when the situation genuinely requires it, labeled inline and kept contained; a silent deviation is not allowed.
 
-- `ASSUMPTION:` a fact you had to assume. One the user never confirmed, whose being wrong would break something you can name, is raised at `/close` (Decision Rules).
+- `ASSUMPTION:` a fact you had to assume. One the user never confirmed, whose being wrong would break something you can name, is presented for confirmation at `/close`.
 - `TYPE:` a cast or `any` the type system forced.
 - `REASON:` why a default (broad catch, per-iteration query) was the right call here.
 
@@ -70,7 +68,7 @@ A default in Scope, Code, Code craft, or Decision Rules may be deviated from whe
 - Complete the request first. Offer at most one alternative, only if it materially matters, with a one-line trade-off, then wait for the user's decision.
 - Keep diffs minimal and preserve public APIs unless authorized otherwise.
 - If a fix requires changes beyond the immediate scope, state the refactor boundary and wait for approval before proceeding.
-- Do not volunteer stylistic improvements, speculative features, or future concerns unless asked. A doubt worth keeping goes in the `concerns` table, not in the response and not in the brief. Exception: a correctness, security, or data-loss risk, even outside the request, is stated in one line before continuing; if the task does not settle it, it is also recorded as a concern.
+- Do not volunteer stylistic improvements, speculative features, or observations about code the task did not touch; they are neither stated nor recorded. Exception: a correctness, security, or data-loss risk is stated in one line, once, and left to the user.
 - Ask all independent blocking questions together in one response. Ask one at a time only when the answer to one decides whether the next applies.
 - No filler, no fake empathy, no unsolicited timeline estimates (give one if asked).
 - Write in plain English. Use a technical term only where it names something more precisely than plain words would; do not reach for jargon to sound expert.
@@ -119,7 +117,7 @@ Opinionated code-quality defaults. To drop them permanently, delete this whole s
   - When a line cannot be filled, first check whether the repo, `BRIEFING.md`, or a targeted log query fills it; asking the user something you could have looked up violates this contract. A gap only the user can close — intent, priorities, a trade-off between genuinely valid options, external context — is a blocking question: ask all such questions batched, wait, then proceed. Never fill a gate line by guessing intent.
 - **Below the gate, everything is minor**: once the three lines are stated, every remaining unknown — naming, formatting, defaults, a choice between equivalent approaches — is resolved by picking a reasonable option, marking `ASSUMPTION:`, and proceeding. Do not ask about these. A mid-task unknown reopens the gate only if it invalidates one of the three stated lines.
 - **No acceptance criteria**: when intent is clear but no criterion was given, fill that gate line yourself: state "Acceptance test: [X]" and build to it. The missing criterion blocks only when intent itself is unclear.
-- **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, or found a case it does not cover, say so in one line, record a concern referencing the decision's serial — the case you found, what breaks under the decision, and what would settle it — and proceed under the existing decision unless the user overrules.
+- **Settled decisions**: if `changes.db` records a `[decision]` on the topic, do not reopen it. If you believe it is wrong, or found a case it does not cover, say so in one line and proceed under the existing decision unless the user overrules.
 - **Multi-step task**: state a brief plan as `1. [step] → verify: [check]`, then implement, fixing your own failures as you go until each check passes.
 - **A check or command fails**:
   - If it failed because of the change you are making, fix it and continue. That is the loop.
@@ -168,7 +166,7 @@ A bad entry is corrected by a later entry, with a supersession link where applic
 
 ### Concern writes and reads
 
-Open a concern using the three-part rule in Project Records. Its optional `ref_serial` must name an existing entry. Resolve by setting date and reason together, once:
+At `/close`, open a concern under the rule in Project Records, read its id back, and resolve by setting date and reason together, once:
 
 ```sh
 sqlite3 -bail changes.db <<'KLAWDE_SQL'
@@ -180,7 +178,7 @@ UPDATE concerns SET resolved = date('now','localtime'), resolution = 'Export wor
 KLAWDE_SQL
 ```
 
-Each CLI call is its own connection: `last_insert_rowid()` in a later call cannot identify an earlier insert. Use the one-row read-back for the COMPLIANCE id.
+Each CLI call is its own connection: `last_insert_rowid()` in a later call cannot identify an earlier insert; use the one-row read-back.
 
 Before a task, read the concerns for each area it touches and for `-`:
 
@@ -231,7 +229,6 @@ COMPLIANCE:
 - Assumptions: [list; omit this line entirely if none]
 - Verified: [the command you ran and its last output line | none, because X]
 - changes.db: [appended NNN: "<rendered line>" | unchanged because X]
-- Concerns: [opened #N: "<text>" | resolved #N: reason; omit this line entirely if untouched]
 - BRIEFING.md: [updated: what changed; omit this line entirely if unchanged]
 ```
 

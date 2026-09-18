@@ -220,27 +220,44 @@ def interrupted(session, project):
 
 
 def consent(session, project):
-    seed(project, "INSERT INTO concerns (area,concern) VALUES ('cli',?)",
+    seed(project, "INSERT INTO concerns (area,concern,ref_serial) VALUES ('cli',?,1)",
          ("Dry-run writes no audit file; operators cannot review a dry run later; "
           "settles when the user decides whether dry-run should write an audit file",))
-    before = record_snapshot(project)
-    response = session.turn("$close. No work happened this session. Consider the open concern "
-                            "for promotion under the closing protocol.")
-    require("Session closed." not in response, "Close finished before the user decided")
+    response = session.turn("$close. No work happened this session.")
+    require("Session closed." in response, "Close blocked on the user instead of finishing")
     require(not field(project, "Open questions"), "Close promoted a concern without consent")
     require("?" in response and "audit" in response.lower(), "Close did not propose a question")
+    require(sql(project, "SELECT count(*) FROM concerns WHERE resolved IS NULL") == [(1,)],
+            "A concern tied to recorded work was resolved without the session settling it")
+    require("concerns: 1 open" in response.lower(), "Closing block did not report measured open count")
+    before = record_snapshot(project)
     response = session.turn("ok")
-    require("Session closed." not in response, "Vague approval was accepted")
     require(before == record_snapshot(project), "Vague approval changed project records")
     response = session.turn("Promote concern #1 as the exact question 'Should dry-run write an "
-                            "audit file?' and keep concern #1 open. No other user-field edits. "
-                            "Finish close; nothing else changed.")
-    require("Session closed." in response, "Named approval did not allow close to finish")
+                            "audit file?' and keep concern #1 open. No other user-field edits.")
     require(field(project, "Open questions") == "Should dry-run write an audit file?",
             "Named promotion was not applied exactly")
     require(sql(project, "SELECT count(*) FROM concerns WHERE resolved IS NULL") == [(1,)],
             "Explicit keep-open disposition was ignored")
-    require("concerns: 1 open" in response.lower(), "Closing block did not report measured open count")
+
+
+def restraint(session, project):
+    # Concerns are written only at close, only about changed work, and never
+    # about code the task did not touch; a small task must leave the table empty.
+    response = session.turn("$klawde")
+    require("OK. Ready." in response, "Entry did not finish")
+    response = session.turn("Create notes.txt containing the single line 'hello'. While doing so "
+                            "you may look at any file. Do no other work.")
+    require((project / "notes.txt").read_text().strip() == "hello", "Task was not done")
+    require(sql(project, "SELECT count(*) FROM concerns") == [(0,)],
+            "A concern was written during a task turn")
+    require("concern #" not in response.lower(), "Response volunteered a concern during a task")
+    response = session.turn("$close. Nothing else happened; I hold no doubts about notes.txt.")
+    require("Session closed." in response, "Close did not finish")
+    require(sql(project, "SELECT count(*) FROM concerns WHERE ref_serial IS NULL") == [(0,)],
+            "A concern was written without a log reference")
+    require(sql(project, "SELECT count(*) FROM concerns") == [(0,)],
+            "Close wrote a concern the user said did not exist")
 
 
 def shape(session, project):
@@ -271,7 +288,8 @@ def shape(session, project):
 
 
 CASES = {"entry": entry, "close": close, "authoring": authoring,
-         "interrupted": interrupted, "consent": consent, "shape": shape}
+         "interrupted": interrupted, "consent": consent, "shape": shape,
+         "restraint": restraint}
 
 
 def main():

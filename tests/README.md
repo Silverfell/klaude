@@ -39,8 +39,9 @@ blocks; it never substitutes a simulated agent for the real conversation.
 | `close` | Preserve literal backticks, `$()`, dollar signs, quotes and apostrophes in a decision; execute none of them; keep user fields intact; avoid duplicate writes at a second checkpoint. |
 | `authoring` | Refuse a bare fact as a concern unless completed into three parts, and keep a change with no project-level meaning out of the permanent log. |
 | `interrupted` | Detect a scope change logged before an interrupted close, stop entry, reconcile only after the user authorizes it, and avoid logging the same scope change again. |
-| `consent` | Wait before promotion, reject ambiguous batch approval, apply a specifically approved question exactly, and honor a keep-open disposition. |
+| `consent` | Finish the close without waiting, propose a promotion as a question without applying it, ignore a vague "ok", then apply a named approval exactly and honor a keep-open disposition. |
 | `shape` | Restore an oversized maintained field while preserving declined user-field reshapes and extra content; paste the actual measured shape. |
+| `restraint` | Write no concern during a task turn, and none at close when the user holds no doubt. |
 
 Every turn also checks that the protected fixture file survives and the agent
 neither stages nor commits changes. Every successful scenario finishes by running

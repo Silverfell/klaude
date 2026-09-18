@@ -577,6 +577,41 @@ check "S34 an extra view is never dropped by the repair" \
 check "S34 its missing trigger was still restored" \
   test "$(sqlite3 -readonly "$d/changes.db" "SELECT count(*) FROM sqlite_master WHERE name='entries_no_delete';")" = "1"
 
+echo "=== S36: a CLAUDE.md with no klawde files beside it is overwritten only after confirmation ==="
+d="$BASE/s36"; mkdir -p "$d"; echo "MY OWN CONTRACT" > "$d/CLAUDE.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup < /dev/null 2>&1)"; rc=$?
+check "S36 non-interactive overwrite refused" bash -c "test $rc -ne 0 && echo \"$out\" | grep -q 'cannot confirm overwriting a possibly foreign CLAUDE.md'"
+check "S36 CLAUDE.md untouched" grepq 'MY OWN CONTRACT' "$d/CLAUDE.md"
+out="$(cd "$d" && printf 'n\n' | "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S36 declining aborts, nothing written" bash -c "test $rc -ne 0 && grep -q 'MY OWN CONTRACT' '$d/CLAUDE.md' && ! test -e '$d/.claude'"
+out="$(cd "$d" && printf 'y\n' | "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S36 confirming overwrites" bash -c "test $rc -eq 0 && cmp -s '$KLAWDE/template/CLAUDE.md' '$d/CLAUDE.md'"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup < /dev/null 2>&1)"; rc=$?
+check "S36 a real install is then upgraded without a prompt" test "$rc" -eq 0
+
+echo "=== S37: a CHANGES.md with no changes.db is refused before any write ==="
+d="$(mkfx s37)"; echo '2025-01-10: legacy' > "$d/CHANGES.md"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+check "S37 exit nonzero, names the commit that still migrates" bash -c "test $rc -ne 0 && echo \"$out\" | grep -q '185c63a'"
+check "S37 nothing written" bash -c "grep -q 'OLD CONTRACT' '$d/CLAUDE.md' && ! test -e '$d/changes.db' && test -f '$d/CHANGES.md'"
+
+echo "=== S38: a v3 log with rows upgrades in place, rows intact, and reports its open concerns ==="
+d="$(mkfx s38)"; mk_old_db "$d/changes.db" 3
+sqlite3 "$d/changes.db" "INSERT INTO areas VALUES ('cli'); INSERT INTO entries (type,area,description) VALUES ('doc','-','Initialized.'); INSERT INTO entries (type,area,description,refs) VALUES ('decision','cli','Chose A over B; B double-bills','abc1'); INSERT INTO links VALUES (2,1,'closes'); INSERT INTO concerns (area,concern) VALUES ('cli','saw; breaks; settles'); INSERT INTO concerns (area,concern,ref_serial) VALUES ('cli','saw; breaks; settles',2); INSERT INTO concerns (concern) VALUES ('old; old; old'); UPDATE concerns SET resolved=date('now','localtime'), resolution='done' WHERE id=3;"
+rows='SELECT * FROM entries; SELECT * FROM links; SELECT * FROM concerns; SELECT * FROM areas;'
+before="$(sqlite3 -readonly "$d/changes.db" "$rows")"
+out="$(cd "$d" && "$KLAWDE/upgrade.sh" --claude --no-backup 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$BASE/s38.out"
+check "S38 exit 0" test "$rc" -eq 0
+check "S38 schema identical to a fresh install" same_as_fresh "$d/changes.db"
+check "S38 every row survives unchanged" test "$before" = "$(sqlite3 -readonly "$d/changes.db" "$rows")"
+check "S38 open concerns reported with the untied count" grepq '2 open concern(s), 1 without a log reference' "$BASE/s38.out"
+# The retire statement close.md ships must touch only open rows without a reference.
+retire="$(sed -n '/^UPDATE concerns SET resolved/p' "$KLAWDE/template/close.md")"
+check "S38 close.md ships one retire statement" test "$(printf '%s\n' "$retire" | grep -c .)" -eq 1
+check "S38 the retire statement resolves only untied open rows" \
+  bash -c "sqlite3 '$d/changes.db' \"$retire\" && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT count(*) FROM concerns WHERE resolved IS NULL;')\" = 1 && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT id FROM concerns WHERE resolved IS NULL;')\" = 2 && test \"\$(sqlite3 -readonly '$d/changes.db' 'SELECT resolution FROM concerns WHERE id=3;')\" = done"
+
 echo "=== S35: every shipped script parses ==="
 # bash -n takes one script; each is verified on its own.
 for f in setup.sh upgrade.sh lib.sh template/check-log.sh tests/verify.sh; do

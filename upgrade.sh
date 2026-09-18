@@ -62,11 +62,14 @@ esac
 # only klawde's own files count as Codex evidence, since .agents/skills is shared.
 has_claude=0
 has_codex=0
+claude_artifacts=0
 codex_artifacts=0
-for f in CLAUDE.md .claude/commands/klawde.md .claude/commands/close.md \
+if [ -f "$TARGET_DIR/CLAUDE.md" ]; then has_claude=1; fi
+for f in .claude/commands/klawde.md .claude/commands/close.md \
          .claude/changes-schema.sql .claude/check-log.sh; do
-  if [ -f "$TARGET_DIR/$f" ]; then has_claude=1; fi
+  if [ -f "$TARGET_DIR/$f" ]; then claude_artifacts=1; fi
 done
+if [ "$claude_artifacts" -eq 1 ]; then has_claude=1; fi
 if [ -f "$TARGET_DIR/AGENTS.md" ]; then has_codex=1; fi
 for f in .agents/skills/klawde/SKILL.md .agents/skills/close/SKILL.md \
          .agents/changes-schema.sql .agents/check-log.sh; do
@@ -124,22 +127,6 @@ fi
 if [ "$TARGET" != "codex" ]; then check_no_symlink "$TARGET_DIR/CLAUDE.md"; fi
 if [ "$TARGET" != "claude" ]; then check_no_symlink "$TARGET_DIR/AGENTS.md"; fi
 
-# An AGENTS.md with no klawde artifacts behind it may belong to another tool.
-if [ "$TARGET" != "claude" ] && [ -f "$TARGET_DIR/AGENTS.md" ] && [ "$codex_artifacts" -eq 0 ]; then
-  echo "Warning: AGENTS.md exists but no .agents/ klawde files were found; it may belong to another tool."
-  echo "Overwrite AGENTS.md and continue? [y/N]"
-  if ! IFS= read -r overwrite_agents; then
-    echo "" >&2
-    echo "Error: stdin closed; cannot confirm overwriting a possibly foreign AGENTS.md. Nothing was changed." >&2
-    echo "Run interactively, or re-run with --claude to leave the Codex layout alone." >&2
-    exit 1
-  fi
-  if [[ ! "$overwrite_agents" =~ ^[Yy]$ ]]; then
-    echo "AGENTS.md left untouched. Nothing was changed." >&2
-    exit 1
-  fi
-fi
-
 db="$TARGET_DIR/changes.db"
 # One line per difference against the shipped schema, as object|name|status.
 db_drift() {
@@ -163,6 +150,10 @@ if [ "$TARGET" != "claude" ]; then
 fi
 DB_DRIFT=""
 uv=""
+if [ ! -e "$db" ] && [ -f "$TARGET_DIR/CHANGES.md" ]; then
+  # A fresh log created later by /klawde would block the old migration for good.
+  bad_dest "CHANGES.md found and no changes.db. This version no longer migrates the text log: run upgrade.sh from klawde commit 185c63a first, or move CHANGES.md aside to start a fresh log."
+fi
 if [ -e "$db" ]; then
   if [ ! -f "$db" ] || ! uv="$(sqlite3 -readonly "$db" 'PRAGMA user_version;' 2>/dev/null)"; then
     bad_dest "changes.db exists but is not a readable SQLite database file; move it aside and re-run."
@@ -202,6 +193,29 @@ if [ "$PREFLIGHT_BAD" -eq 0 ] && [ -n "$DB_DRIFT" ]; then
   done <<< "$DB_DRIFT"
 fi
 gate_preflight
+
+# A root contract with no klawde files behind it may be the user's own, or
+# another tool's; overwriting it needs a confirmation no flag can give.
+confirm_foreign() { # <file> <layout flag that leaves it alone>
+  echo "Warning: $1 exists but no klawde files were found beside it; it may not be klawde's."
+  echo "Overwrite $1 and continue? [y/N]"
+  if ! IFS= read -r answer; then
+    echo "" >&2
+    echo "Error: stdin closed; cannot confirm overwriting a possibly foreign $1. Nothing was changed." >&2
+    echo "Run interactively, or re-run with $2 to leave that layout alone." >&2
+    exit 1
+  fi
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    echo "$1 left untouched. Nothing was changed." >&2
+    exit 1
+  fi
+}
+if [ "$TARGET" != "codex" ] && [ -f "$TARGET_DIR/CLAUDE.md" ] && [ "$claude_artifacts" -eq 0 ]; then
+  confirm_foreign CLAUDE.md --codex
+fi
+if [ "$TARGET" != "claude" ] && [ -f "$TARGET_DIR/AGENTS.md" ] && [ "$codex_artifacts" -eq 0 ]; then
+  confirm_foreign AGENTS.md --claude
+fi
 
 echo ""
 echo "Upgrading klawde defaults in $TARGET_DIR (target: $TARGET, backups: $BACKUP)"
@@ -333,6 +347,11 @@ if [ -f "$db" ]; then
   fi
   if [ -n "$repairable" ]; then
     echo "Reconciled trigger/view definitions with the shipped schema."
+  fi
+  open="$(sqlite3 -readonly "$db" 'SELECT count(*) FROM concerns WHERE resolved IS NULL;')"
+  untied="$(sqlite3 -readonly "$db" 'SELECT count(*) FROM concerns WHERE resolved IS NULL AND ref_serial IS NULL;')"
+  if [ "$open" -gt 0 ]; then
+    echo "$open open concern(s), $untied without a log reference; the next /close retires the latter and presents the rest."
   fi
 fi
 

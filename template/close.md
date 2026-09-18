@@ -18,38 +18,31 @@ sqlite3 -readonly changes.db "SELECT line FROM log_lines ORDER BY serial DESC LI
 
    Link superseded decisions and closed notes, and carry current decisions into the brief. If the work contradicts `Current scope`, `Non-goals`, or `Do-not-touch`, flag it to the user before the closing block.
 
-3. **Triage every open concern.** First read the open set, then open any qualifying session doubts not already recorded, using the contract's three-part form and optional log reference:
+3. **Triage open concerns.** Read the open set:
 
 ```sh
 sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 ORDER BY id;"
 ```
 
-   If the `concerns` table is absent, inspect `PRAGMA user_version`: on pre-v3 report `schema pre-v3 — run upgrade.sh` and skip triage; on a newer database report damage and stop.
+   If the `concerns` table is absent, inspect `PRAGMA user_version`: on pre-v3 report `schema pre-v3 — run upgrade.sh` and skip this step; on a newer database report damage and stop.
 
-   Recover unconfirmed `ASSUMPTION:` items from the conversation, COMPLIANCE blocks and diff. Raise only those whose being wrong has a nameable consequence. Do not insert them yet.
-
-   Read the open set again after any inserts; use this query to flag possible malformed concerns:
+   - Resolve every open concern without a `ref_serial` in one statement; they predate the rule that ties a concern to recorded work:
 
 ```sh
-sqlite3 -readonly changes.db "SELECT line FROM concern_lines WHERE is_resolved = 0 AND id IN (SELECT id FROM concerns WHERE length(concern) - length(replace(concern, ';', '')) < 2) ORDER BY id;"
+sqlite3 -bail changes.db <<'KLAWDE_SQL'
+UPDATE concerns SET resolved = date('now','localtime'), resolution = 'retired; not attached to recorded work' WHERE resolved IS NULL AND ref_serial IS NULL;
+KLAWDE_SQL
 ```
 
-   Counting semicolons is a first pass; judge the three parts. Restate a doubt still held by inserting a complete concern, reading its id back, then resolving the old row as `restated as #N`. Never edit its frozen text. Resolve a bare fact, task or receipt with the reason it was not a concern. Re-read the open set before disposition so the user sees the corrected set.
+   - Resolve what this session answered, made moot, or you no longer hold, with the reason. An answer given at a certainty gate counts; one that decided anything also gets a `[decision]` in step 2. Never resolve a live doubt to shorten the list. A concern short of its three parts is restated as a complete one and resolved as `restated as #N`, or resolved with the reason it was not a concern.
+   - Write the doubts you still hold about work this session changed, under the contract's rule: at most three, each three-part, each with `ref_serial` naming that work's entry from step 2, none about code the session did not change. Recover unconfirmed `ASSUMPTION:` items from the conversation and diff; one whose being wrong has a nameable consequence is presented for confirmation below and becomes a concern only if the user defers it.
+   - Present what is still open in one batch, each with a proposed disposition (resolve with reason, promote, or keep open) and each consequential assumption named for confirmation. The close does not wait for the reply: keep open is the default, and dispositions the user gives afterwards are applied with the contract's forms. Promote only on a named yes, as the exact decision question rather than the concern text, into `Open questions`; if the user answers the question instead, record the decision and resolve the concern. A confirmed assumption needs no row; a corrected one becomes a decision and, if it changes code, a next step.
 
-   Dispose of every open concern:
-
-   - Resolve it yourself only if this session answered it, made it moot, or you no longer hold it; record the reason. An answer already given at a certainty gate counts. If it decided anything, also append a `[decision]` in step 2. Never resolve a live doubt to shorten the list.
-   - Present everything else in one batch, each named with a proposed disposition: resolve (with reason), promote, or keep open. Include consequential unconfirmed assumptions, each named for confirmation. Wait for the reply; do not print "Session closed." while an answer is pending. A vague "ok" or "fine" approves none of the batch: ask again with the items named.
-   - Promote only when a user's decision would settle the concern, and propose the exact decision question rather than the concern text. A named yes authorizes that addition to `Open questions` in step 4. If the user answers the question instead, record the decision, resolve the concern, and promote nothing. Deferral keeps the concern open for the next close.
-   - A confirmed assumption needs no row. A corrected one becomes a decision and, if it changes code, a next step; no concern row. Only a deferred assumption becomes a three-part concern now. Do not propose promoting assumptions; if the user identifies one as an unmade decision, promote as directed.
-
-   Apply dispositions using the contract's safe SQL forms. After every disposition, measure the remaining open total for the closing block:
+   Measure the open total for the closing block; use the query's number, never your tally:
 
 ```sh
 sqlite3 -readonly changes.db "SELECT count(*) FROM concerns WHERE resolved IS NULL;"
 ```
-
-   Use the query's number, never your tally. A mistyped resolution id leaves its concern open and must be reconciled before finishing.
 
 4. Apply the contract's **Briefing maintenance** to all nine maintained fields, even those untouched by this session's code, and report restored fields.
 
