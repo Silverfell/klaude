@@ -78,7 +78,7 @@ install_claude() {
     cp "$SCRIPT_DIR/template/CLAUDE.md" "$dst"
     echo "Copied $dst."
   fi
-  for cmd in klawde.md close.md; do
+  for cmd in klawde.md close.md upgrade_klawde.md; do
     dst="$TARGET_DIR/.claude/commands/$cmd"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -86,7 +86,7 @@ install_claude() {
       echo "Copied $dst."
     fi
   done
-  for artifact in changes-schema.sql check-log.sh; do
+  for artifact in changes-schema.sql; do
     dst="$TARGET_DIR/.claude/$artifact"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -114,7 +114,8 @@ install_codex() {
   fi
   install_skill klawde klawde.md "$KLAWDE_SKILL_DESC"
   install_skill close close.md "$CLOSE_SKILL_DESC"
-  for artifact in changes-schema.sql check-log.sh; do
+  install_skill upgrade_klawde upgrade_klawde.md "$UPGRADE_KLAWDE_SKILL_DESC"
+  for artifact in changes-schema.sql; do
     dst="$TARGET_DIR/.agents/$artifact"
     if should_write "$dst"; then
       mkdir -p "$(dirname "$dst")"
@@ -124,12 +125,24 @@ install_codex() {
   done
 }
 
+# guidelines.md is the same file in both layouts, so it is written once
+# regardless of target: writing it per layout would prompt --both users to
+# overwrite the file the first layout just installed.
+install_guidelines() {
+  local dst="$TARGET_DIR/guidelines.md"
+  if should_write "$dst"; then
+    cp "$SCRIPT_DIR/template/guidelines.md" "$dst"
+    echo "Copied $dst."
+  fi
+}
+
 # Refuse symlinked, unwritable and blocked destinations before any write.
 if [ "$TARGET" != "codex" ]; then
   check_no_symlink "$TARGET_DIR/CLAUDE.md"
   for path in "$TARGET_DIR/CLAUDE.md" "$TARGET_DIR/.claude/commands/klawde.md" \
               "$TARGET_DIR/.claude/commands/close.md" \
-              "$TARGET_DIR/.claude/changes-schema.sql" "$TARGET_DIR/.claude/check-log.sh"; do
+              "$TARGET_DIR/.claude/commands/upgrade_klawde.md" \
+              "$TARGET_DIR/.claude/changes-schema.sql"; do
     check_dest "$path"
   done
 fi
@@ -137,10 +150,12 @@ if [ "$TARGET" != "claude" ]; then
   check_no_symlink "$TARGET_DIR/AGENTS.md"
   for path in "$TARGET_DIR/AGENTS.md" "$TARGET_DIR/.agents/skills/klawde/SKILL.md" \
               "$TARGET_DIR/.agents/skills/close/SKILL.md" \
-              "$TARGET_DIR/.agents/changes-schema.sql" "$TARGET_DIR/.agents/check-log.sh"; do
+              "$TARGET_DIR/.agents/skills/upgrade_klawde/SKILL.md" \
+              "$TARGET_DIR/.agents/changes-schema.sql"; do
     check_dest "$path"
   done
 fi
+check_dest "$TARGET_DIR/guidelines.md"
 gate_preflight
 
 # From the first write onward, an abort must say the install may be partial.
@@ -155,11 +170,13 @@ case "$TARGET" in
   codex)  install_codex ;;
   both)   install_claude; install_codex ;;
 esac
+install_guidelines
 
 trap - EXIT
 echo ""
 echo "Done. Project initialized at $TARGET_DIR (target: $TARGET, source version: $(source_version))"
 echo "Run /klawde in Claude Code, or \$klawde in Codex, to start a session; it creates BRIEFING.md and changes.db on its first run."
+echo "guidelines.md at the project root is yours now: edit it, or delete it to turn those code rules off. Upgrades never write it."
 if [ "$TARGET" != "codex" ]; then
   echo "If a Claude Code session is already open in this project, restart it: slash commands load at session start."
 fi

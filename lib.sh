@@ -64,15 +64,16 @@ gate_preflight() {
 }
 
 # Rewrite a template for the Codex layout: retitle the contract, retarget the
-# command, schema and checker paths, and turn slash invocations into $skills.
+# command and schema paths, and turn slash invocations into $skills.
 rewrite_codex() {
   sed -e '1s/^# CLAUDE\.md$/# AGENTS.md/' \
       -e 's/^## Slash Commands$/## Skills/' \
-      -e 's#`\.claude/commands/\([A-Za-z]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
+      -e 's#`\.claude/commands/\([A-Za-z_]*\)\.md`#`.agents/skills/\1/SKILL.md`#g' \
       -e 's#\.claude/changes-schema\.sql#.agents/changes-schema.sql#g' \
-      -e 's#\.claude/check-log\.sh#.agents/check-log.sh#g' \
+      -e 's#`/upgrade_klawde`#`$upgrade_klawde`#g' \
       -e 's#`/klawde`#`$klawde`#g' \
       -e 's#`/close`#`$close`#g' \
+      -e 's|^# /upgrade_klawde: |# $upgrade_klawde: |' \
       -e 's|^# /klawde: |# $klawde: |' \
       -e 's|^# /close: |# $close: |' \
       "$1"
@@ -90,8 +91,9 @@ build_skill_file() { # <src> <name> <description> <dst>
   } > "$dst"
 }
 
-KLAWDE_SKILL_DESC="Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, the last 5 changes.db log entries, and the open-concern counts by area (creating BRIEFING.md and changes.db if missing), then confirm readiness at session start."
-CLOSE_SKILL_DESC="Run only when explicitly invoked. Klawde close protocol: append decisions and scope changes to the changes.db log, triage open concerns, update BRIEFING.md, and verify log integrity before ending work."
+KLAWDE_SKILL_DESC="Run only when explicitly invoked. Klawde entry protocol: read BRIEFING.md in full, guidelines.md if present, the last 5 changes.db log entries and the open tasks, creating the records if missing, then confirm readiness at session start."
+CLOSE_SKILL_DESC="Run only when explicitly invoked. Klawde close protocol: append what was done to the changes.db log, clear completed tasks, and update BRIEFING.md where this session changed what it states."
+UPGRADE_KLAWDE_SKILL_DESC="Run only when explicitly invoked, after upgrade.sh. Klawde record migration: bring an older changes.db to the current schema and rewrite BRIEFING.md to its four fields, with the user approving each step."
 
 source_version() {
   git -C "$SCRIPT_DIR" log -1 --format='%h %ad' --date=short 2>/dev/null || echo unknown
